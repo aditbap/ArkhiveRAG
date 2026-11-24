@@ -10,6 +10,14 @@ const ASSIGNABLE: Role[] = ['admin', 'member', 'viewer'];
 
 const libraryRepo = new LibraryRepository();
 
+/** Invalidate org-wide ACL & chat caches immediately on membership/role changes. */
+async function bumpAclCacheVersion(orgId: string) {
+  await Promise.all([
+    redisConnection.incr(`rag:acl-version:${orgId}`).catch(() => undefined),
+    redisConnection.incr(`rag:cache-version:${orgId}`).catch(() => undefined),
+  ]);
+}
+
 function fail(reply: FastifyReply, request: FastifyRequest, status: number, code: string, message: string) {
   return reply.status(status).send({ error: { code, message, requestId: request.id } });
 }
@@ -99,6 +107,7 @@ export const libraryRoutes: FastifyPluginAsync = async (fastify) => {
     const { id } = request.params as { id: string };
     const org = await libraryRepo.archive(id);
     if (!org) return fail(reply, request, 400, 'NOT_SHARED', 'Only shared libraries can be deleted');
+    await bumpAclCacheVersion(id);
     return reply.status(204).send();
   });
 
@@ -128,6 +137,7 @@ export const libraryRoutes: FastifyPluginAsync = async (fastify) => {
       return fail(reply, request, 409, 'LAST_OWNER', 'A library must keep at least one owner');
     }
     const updated = await libraryRepo.setMemberRole(id, userId, role);
+    await bumpAclCacheVersion(id);
     return { data: { userId, role: updated?.role } };
   });
 
@@ -151,6 +161,7 @@ export const libraryRoutes: FastifyPluginAsync = async (fastify) => {
       return fail(reply, request, 409, 'LAST_OWNER', 'Transfer ownership before the last owner leaves');
     }
     await libraryRepo.removeMember(id, userId);
+    await bumpAclCacheVersion(id);
     return reply.status(204).send();
   });
 

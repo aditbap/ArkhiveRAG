@@ -1,6 +1,7 @@
 import { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import '@fastify/multipart';
 import { requirePermissionMiddleware, requireUser, canMutateDocument, type Role } from '@rag/auth';
+import { isDocumentGovernanceStatus, validateGovernanceTransition, type DocumentGovernanceStatus } from '@rag/core';
 import { DocumentRepository, JobRepository, FolderRepository, LibraryRepository, KnowledgeGraphRepository } from '@rag/database';
 import { MinioStorageProvider } from '@rag/providers';
 import { ingestionQueue, redisConnection } from '../queue.js';
@@ -475,6 +476,71 @@ export const documentRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     return { data: doc };
+  });
+
+  // Enterprise Document Approval & Governance Workflow (draft -> approved -> active -> superseded | archived)
+  fastify.patch('/:id/governance', {
+    preHandler: requirePermissionMiddleware('documents:update'),
+  }, async (request, reply) => {
+    const orgId = request.user?.orgId || request.user?.id;
+    const actorUserId = request.user?.id;
+    if (!orgId || !actorUserId) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'User does not belong to an organization' } });
+    }
+
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as {
+      governanceStatus?: unknown;
+      effectiveAt?: string | null;
+      expiresAt?: string | null;
+      supersedesDocumentId?: string | null;
+      authorityTier?: number;
+      note?: string;
+    };
+
+    if (!isDocumentGovernanceStatus(body.governanceStatus)) {
+      return reply.status(400).send({
+        error: {
+          code: 'BAD_REQUEST',
+          message: 'governanceStatus must be one of: draft, approved, active, superseded, archived',
+        },
+      });
+    }
+
+    const target = await docRepo.findById(orgId, id);
+    if (!target) {
+      return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Document not found' } });
+    }
+
+    const fromStatus: DocumentGovernanceStatus = isDocumentGovernanceStatus(target.governanceStatus)
+      ? target.governanceStatus
+      : 'active';
+    const check = validateGovernanceTransition(fromStatus, body.governanceStatus, String(request.userRole ?? 'viewer'));
+    if (!check.allowed) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: check.reason ?? 'Transition not allowed' } });
+    }
+
+    if (body.supersedesDocumentId && !UUID_RE.test(body.supersedesDocumentId)) {
+      return reply.status(400).send({ error: { code: 'BAD_REQUEST', message: 'Invalid supersedesDocumentId UUID' } });
+    }
+
+    const updated = await docRepo.updateGovernance(orgId, id, {
+      governanceStatus: body.governanceStatus,
+      effectiveAt: body.effectiveAt === undefined ? undefined : body.effectiveAt ? new Date(body.effectiveAt) : null,
+      expiresAt: body.expiresAt === undefined ? undefined : body.expiresAt ? new Date(body.expiresAt) : null,
+      supersedesDocumentId: body.supersedesDocumentId,
+      authorityTier:
+        typeof body.authorityTier === 'number' && body.authorityTier >= 1 && body.authorityTier <= 4
+          ? Math.round(body.authorityTier)
+          : undefined,
+      actorUserId,
+      previousStatus: fromStatus,
+      existingMetadata: (target.metadata ?? {}) as Record<string, unknown>,
+      note: typeof body.note === 'string' ? body.note.slice(0, 500) : undefined,
+    });
+
+    await bumpCacheVersion(orgId);
+    return { data: updated };
   });
 
   // Delete a document

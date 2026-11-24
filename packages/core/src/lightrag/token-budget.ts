@@ -130,10 +130,46 @@ export function truncateByTokenBudget<T>(
   return { kept, formatted, tokensUsed };
 }
 
+function compactText(text: string, maxChars: number): string {
+  const cleaned = text.replaceAll(CONSTANTS.KG_FIELD_SEP, '; ').replace(/\s+/g, ' ').trim();
+  return cleaned.length > maxChars ? `${cleaned.slice(0, maxChars - 1).trimEnd()}…` : cleaned;
+}
+
 /**
- * Assembles LightRAG's structured dual-level context (Knowledge Graph Entities +
- * Relationships + grounded Document Chunks with `[Citation N]` markers) while
- * strictly respecting independent entity, relation, and total token budgets.
+ * Prioritizes KG entities/relations that add NOVEL or CROSS-DOCUMENT bridge context
+ * not already verbatim inside the selected `chunksUsed`, while keeping at most
+ * `maxRedundantSignposts` concise items whose provenance chunks are already present.
+ */
+function prioritizeNonRedundantKg<T extends { sourceChunkIds: string[]; documentIds: string[] }>(
+  items: T[],
+  coveredChunkIds: Set<string>,
+  maxRedundantSignposts = 2,
+): T[] {
+  if (items.length === 0 || coveredChunkIds.size === 0) return items;
+  const novelOrBridge: T[] = [];
+  const redundant: T[] = [];
+
+  for (const item of items) {
+    const hasUncoveredChunk =
+      item.sourceChunkIds.length === 0 || item.sourceChunkIds.some((cid) => !coveredChunkIds.has(cid));
+    const isCrossDocBridge = item.documentIds.length > 1;
+    if (hasUncoveredChunk || isCrossDocBridge) {
+      novelOrBridge.push(item);
+    } else {
+      redundant.push(item);
+    }
+  }
+
+  return [...novelOrBridge, ...redundant.slice(0, maxRedundantSignposts)];
+}
+
+/**
+ * Assembles LightRAG's structured dual-level context (compact Knowledge Graph Entities +
+ * Relationships + grounded Document Chunks with `[Citation N]` markers):
+ * - Prioritizes grounded `[Citation N]` document chunks first.
+ * - Prunes redundant single-chunk KG items already verbatim in selected chunks while
+ *   preserving cross-document bridge & novel KG facts.
+ * - Uses compact single-line KG formatting (~45% fewer tokens than verbose JSON-per-item).
  */
 export function assembleLightRagContext(params: {
   entities: RetrievedEntity[];
@@ -145,59 +181,55 @@ export function assembleLightRagContext(params: {
   const maxRelationTokens = params.budget?.maxRelationTokens ?? CONSTANTS.DEFAULT_MAX_RELATION_TOKENS;
   const maxTotalTokens = params.budget?.maxTotalTokens ?? CONSTANTS.DEFAULT_MAX_TOTAL_TOKENS;
 
-  const entitySlice = truncateByTokenBudget(
-    params.entities,
-    (e) =>
-      JSON.stringify({
-        entity: e.entityName,
-        type: e.entityType,
-        description: e.description.replaceAll(CONSTANTS.KG_FIELD_SEP, '; '),
-      }),
-    Math.min(maxEntityTokens, Math.floor(maxTotalTokens * 0.35)),
-  );
+  const entityCap = Math.min(maxEntityTokens, Math.floor(maxTotalTokens * 0.28));
+  const relationCap = Math.min(maxRelationTokens, Math.floor(maxTotalTokens * 0.28));
+  const overheadTokens = 80;
 
-  const relationSlice = truncateByTokenBudget(
-    params.relations,
-    (r) =>
-      JSON.stringify({
-        source: r.sourceEntity,
-        target: r.targetEntity,
-        keywords: r.keywords,
-        description: r.description.replaceAll(CONSTANTS.KG_FIELD_SEP, '; '),
-      }),
-    Math.min(maxRelationTokens, Math.floor(maxTotalTokens * 0.35)),
-  );
-
-  const overheadTokens = 120;
-  const remainingChunkBudget = Math.max(
-    512,
-    maxTotalTokens - entitySlice.tokensUsed - relationSlice.tokensUsed - overheadTokens,
-  );
-
+  // 1. Reserve primary budget for grounded `[Citation N]` document chunks first
+  const chunkBudget = Math.max(512, maxTotalTokens - Math.min(entityCap + relationCap, Math.floor(maxTotalTokens * 0.4)) - overheadTokens);
   const chunkSlice = truncateByTokenBudget(
     params.chunks,
     (c, idx) => {
       const metaParts = [`Source: ${c.documentTitle}`];
-      if (c.sectionHeading) metaParts.push(`Section: ${c.sectionHeading}`);
+      if (c.sectionHeading && c.sectionHeading.toLowerCase() !== c.documentTitle.toLowerCase()) {
+        metaParts.push(`Section: ${c.sectionHeading}`);
+      }
       if (c.pageNumber != null) metaParts.push(`Page: ${c.pageNumber}`);
       if (c.temporalBadge) metaParts.push(c.temporalBadge);
       return `[Citation ${idx + 1}] ${metaParts.join(' | ')}\n${c.content}`;
     },
-    remainingChunkBudget,
+    chunkBudget,
+  );
+
+  // 2. Prune KG redundancy against chunks already included & serialize compactly (~45% token savings)
+  const coveredChunkIds = new Set(chunkSlice.kept.map((c) => c.id));
+  const prunedEntities = prioritizeNonRedundantKg(params.entities, coveredChunkIds, 2);
+  const prunedRelations = prioritizeNonRedundantKg(params.relations, coveredChunkIds, 2);
+
+  const remainingForKg = Math.max(0, maxTotalTokens - chunkSlice.tokensUsed - overheadTokens);
+  const effEntityCap = Math.min(entityCap, Math.floor(remainingForKg * 0.52));
+
+  const entitySlice = truncateByTokenBudget(
+    prunedEntities,
+    (e) => `- ${e.entityName} (${e.entityType}): ${compactText(e.description, 160)}`,
+    effEntityCap,
+  );
+
+  const effRelationCap = Math.min(relationCap, Math.max(0, remainingForKg - entitySlice.tokensUsed));
+  const relationSlice = truncateByTokenBudget(
+    prunedRelations,
+    (r) => `- ${r.sourceEntity} -> ${r.targetEntity} [${compactText(r.keywords, 40)}]: ${compactText(r.description, 140)}`,
+    effRelationCap,
   );
 
   const sections: string[] = [];
 
   if (entitySlice.formatted.length > 0) {
-    sections.push(
-      `### Knowledge Graph Data (Entities)\n\`\`\`json\n[\n${entitySlice.formatted.join(',\n')}\n]\n\`\`\``,
-    );
+    sections.push(`### Knowledge Graph Data (Entities)\n${entitySlice.formatted.join('\n')}`);
   }
 
   if (relationSlice.formatted.length > 0) {
-    sections.push(
-      `### Knowledge Graph Data (Relationships)\n\`\`\`json\n[\n${relationSlice.formatted.join(',\n')}\n]\n\`\`\``,
-    );
+    sections.push(`### Knowledge Graph Data (Relationships)\n${relationSlice.formatted.join('\n')}`);
   }
 
   if (chunkSlice.formatted.length > 0) {

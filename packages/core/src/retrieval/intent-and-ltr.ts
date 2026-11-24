@@ -122,9 +122,9 @@ export const DEFAULT_RETRIEVAL_CONFIG: RetrievalConfigPayload = {
         exactCodeMatch: 0.28,
         parentCoherence: 0.01,
       },
-      maxContextTokens: 1800,
-      maxEntityTokens: 350,
-      maxRelationTokens: 250,
+      maxContextTokens: 1200,
+      maxEntityTokens: 120,
+      maxRelationTokens: 100,
       rerankLimit: 5,
       minRelevanceScore: 0.12,
       skipParentExpandAbove: 0.85,
@@ -147,9 +147,9 @@ export const DEFAULT_RETRIEVAL_CONFIG: RetrievalConfigPayload = {
         exactCodeMatch: 0.10,
         parentCoherence: 0.02,
       },
-      maxContextTokens: 1900,
-      maxEntityTokens: 450,
-      maxRelationTokens: 350,
+      maxContextTokens: 1400,
+      maxEntityTokens: 140,
+      maxRelationTokens: 120,
       rerankLimit: 5,
       minRelevanceScore: 0.12,
       skipParentExpandAbove: 0.85,
@@ -172,10 +172,10 @@ export const DEFAULT_RETRIEVAL_CONFIG: RetrievalConfigPayload = {
         exactCodeMatch: 0.12,
         parentCoherence: 0.02,
       },
-      maxContextTokens: 2600,
-      maxEntityTokens: 650,
-      maxRelationTokens: 550,
-      rerankLimit: 6,
+      maxContextTokens: 1800,
+      maxEntityTokens: 180,
+      maxRelationTokens: 160,
+      rerankLimit: 5,
       minRelevanceScore: 0.12,
       skipParentExpandAbove: 0.95,
     },
@@ -197,10 +197,10 @@ export const DEFAULT_RETRIEVAL_CONFIG: RetrievalConfigPayload = {
         exactCodeMatch: 0.18,
         parentCoherence: 0.03,
       },
-      maxContextTokens: 3200,
-      maxEntityTokens: 900,
-      maxRelationTokens: 850,
-      rerankLimit: 7,
+      maxContextTokens: 2200,
+      maxEntityTokens: 260,
+      maxRelationTokens: 260,
+      rerankLimit: 6,
       minRelevanceScore: 0.10,
       skipParentExpandAbove: 0.98,
     },
@@ -222,10 +222,10 @@ export const DEFAULT_RETRIEVAL_CONFIG: RetrievalConfigPayload = {
         exactCodeMatch: 0.10,
         parentCoherence: 0.04,
       },
-      maxContextTokens: 3800,
-      maxEntityTokens: 1000,
-      maxRelationTokens: 1000,
-      rerankLimit: 8,
+      maxContextTokens: 2400,
+      maxEntityTokens: 280,
+      maxRelationTokens: 280,
+      rerankLimit: 6,
       minRelevanceScore: 0.10,
       skipParentExpandAbove: 0.98,
     },
@@ -247,10 +247,10 @@ export const DEFAULT_RETRIEVAL_CONFIG: RetrievalConfigPayload = {
         exactCodeMatch: 0.04,
         parentCoherence: 0.04,
       },
-      maxContextTokens: 4000,
-      maxEntityTokens: 950,
-      maxRelationTokens: 1050,
-      rerankLimit: 8,
+      maxContextTokens: 2600,
+      maxEntityTokens: 320,
+      maxRelationTokens: 340,
+      rerankLimit: 7,
       minRelevanceScore: 0.08,
       skipParentExpandAbove: 0.98,
     },
@@ -539,12 +539,12 @@ export function computeAdaptiveTopK(
   }
   const top1 = topScores[0] ?? 0;
   const top2 = topScores[1] ?? 0;
-  // High-confidence unambiguous lookup: trim tail to 4 chunks (saves ~30% tokens without losing recall)
-  if (hasExactCodeMatch && top1 >= 0.78 && top1 - top2 >= 0.14) {
-    return Math.min(safeBase, 4);
+  // High-confidence unambiguous single-doc lookup: trim tail to 3 chunks (~40% fewer tokens, 0 recall loss)
+  if (hasExactCodeMatch && top1 >= 0.72 && top1 - top2 >= 0.10) {
+    return Math.min(safeBase, 3);
   }
-  if (intent === 'factual' && top1 >= 0.82 && top1 - top2 >= 0.18) {
-    return Math.min(safeBase, 4);
+  if (intent === 'factual' && top1 >= 0.75 && top1 - top2 >= 0.10) {
+    return Math.min(safeBase, 3);
   }
   return safeBase;
 }

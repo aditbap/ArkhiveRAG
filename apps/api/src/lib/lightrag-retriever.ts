@@ -12,6 +12,7 @@ import {
   computeExactCodeMatchScore,
   computeHeadingMatchScore,
   computePersonalizedPageRank,
+  detectEvidenceContradictions,
   detectQueryAmbiguity,
   enrichPronounQueryWithHistory,
   evaluateCragConfidence,
@@ -29,13 +30,16 @@ import {
   selectDiverseNonDuplicateCandidates,
   shouldDecomposeQuery,
   traceTopPprPaths,
+  verifyMultiHopEvidenceCoverage,
   weightedReciprocalRankFusion,
   type AmbiguityAssessment,
   type AssembledContext,
   type ConcreteRagQueryMode,
   type ContextChunkInput,
+  type ContradictionAnalysis,
   type CragEvaluation,
   type EmbeddingProvider,
+  type MultiHopCoverageReport,
   type PprPathTrace,
   type QueryAnalysisResult,
   type QueryFeatures,
@@ -114,6 +118,8 @@ export interface LightRagRetrievalResult {
   subQueries: string[];
   crag: CragEvaluation;
   ambiguity: AmbiguityAssessment;
+  contradictions: ContradictionAnalysis;
+  multiHopCoverage: MultiHopCoverageReport;
   pprPaths: PprPathTrace[];
   historyInjectionsNeutralized: number;
   communitiesUsed: CommunitySummaryHit[];
@@ -494,7 +500,15 @@ export class LightRagRetriever {
     const qIdx = registerText(standaloneQuery);
     const llIdx = registerText(entityQuery);
     const hlIdx = registerText(relationQuery);
-    const extraSubQueries = subQueries.filter((sq) => sq.toLowerCase() !== standaloneQuery.toLowerCase()).slice(0, 2);
+    // Preserve original raw userQuery as a batched dual-query branch whenever history resolution
+    // or rewriting altered standaloneQuery so multi-clause follow-ups never drop second-clause recall.
+    const candidateSubQueries =
+      standaloneQuery.trim().toLowerCase() !== input.userQuery.trim().toLowerCase()
+        ? [...subQueries, input.userQuery]
+        : subQueries;
+    const extraSubQueries = [...new Set(candidateSubQueries)]
+      .filter((sq) => sq.trim().toLowerCase() !== standaloneQuery.trim().toLowerCase())
+      .slice(0, 2);
     const subIdxList = extraSubQueries.map((sq) => ({ query: sq, idx: registerText(sq) }));
 
     const embeddings = await this.batchEmbedQueries(uniqueTexts);
@@ -1097,6 +1111,22 @@ export class LightRagRetriever {
       })),
     });
 
+    const contradictions = detectEvidenceContradictions(
+      keptScored.map((s) => ({
+        id: s.candidate.id,
+        documentId: s.candidate.documentId,
+        documentTitle: s.candidate.documentTitle,
+        content: s.candidate.content,
+        temporalBadge: s.candidate.temporalBadge,
+      })),
+    );
+
+    const multiHopCoverage = verifyMultiHopEvidenceCoverage(
+      intent,
+      pprPaths,
+      keptScored.map((s) => ({ documentId: s.candidate.documentId, content: s.candidate.content })),
+    );
+
     // 10. Token-Efficient Parent-Child Context Expansion (#7)
     let finalChunks: ContextChunkInput[] = keptScored.map((s) => s.candidate);
     const topChildScore = keptScored[0]?.finalScore ?? 0;
@@ -1186,6 +1216,8 @@ export class LightRagRetriever {
       subQueries,
       crag,
       ambiguity,
+      contradictions,
+      multiHopCoverage,
       pprPaths,
       historyInjectionsNeutralized,
       communitiesUsed,
