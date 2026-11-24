@@ -15,11 +15,12 @@ export const documentChunks = pgTable('document_chunks', {
   sectionHeading: text('section_heading'),
   // Foreign key for self-reference (parentChunkId) will be added manually or at query level to avoid circular deps
   parentChunkId: uuid('parent_chunk_id'),
+  chunkRole: varchar('chunk_role', { length: 16 }).default('standalone').notNull(),
   metadata: jsonb('metadata').default('{}').notNull(),
   embeddingModel: varchar('embedding_model', { length: 100 }),
   embedding: customType<{ data: number[]; driverData: string }>({
     dataType() {
-      return 'vector(2048)';
+      return 'vector(1024)';
     },
     toDriver(value: number[]): string {
       return `[${value.join(',')}]`;

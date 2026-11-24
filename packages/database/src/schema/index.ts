@@ -6,3 +6,6 @@ export * from './jobs.js';
 export * from './chat.js';
 export * from './audit.js';
 export * from './folders.js';
+export * from './knowledge-graph.js';
+export * from './learning.js';
+export * from './communities.js';

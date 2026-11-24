@@ -10,6 +10,7 @@ import { guestChatRoutes } from './routes/guest-chat.js';
 import { conversationsRoutes } from './routes/conversations.js';
 import folderRoutes from './routes/folders.js';
 import { libraryRoutes } from './routes/libraries.js';
+import { learningRoutes } from './routes/learning.js';
 import { registerMetrics } from './plugins/metrics.js';
 import { redisConnection } from './queue.js';
 import { consumeRateLimit } from './lib/rate-limit.js';
@@ -101,6 +102,7 @@ export function buildServer(): FastifyInstance {
     api.register(conversationsRoutes, { prefix: '/conversations' });
     api.register(folderRoutes, { prefix: '/folders' });
     api.register(libraryRoutes, { prefix: '/libraries' });
+    api.register(learningRoutes, { prefix: '/retrieval' });
   }, { prefix: '/api/v1' });
 
   return server;

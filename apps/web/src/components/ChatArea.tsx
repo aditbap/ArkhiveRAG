@@ -9,7 +9,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import TextareaAutosize from 'react-textarea-autosize'
 import { cn } from '@/lib/utils'
-import type { ChatMessage, Citation } from '@/types/chat'
+import type { ChatMessage, Citation, RagMode } from '@/types/chat'
 import { useLibraryAccess, readApiError } from '@/lib/active-library'
 import { loadChatScope, saveChatScope } from '@/lib/chat-scope'
 import { createSpeechSession, isSpeechSupported, type SpeechSession } from '@/lib/speech'
@@ -32,6 +32,7 @@ export function ChatArea({
   const [uploadStatus, setUploadStatus] = useState<{ file: string, status: 'uploading' | 'success' | 'error' } | null>(null)
   const [notification, setNotification] = useState<{message: string, type: 'error' | 'success'} | null>(null)
   const [documentIds, setDocumentIds] = useState<string[]>([])
+  const [ragMode, setRagMode] = useState<RagMode>('auto')
   
   useEffect(() => {
     // One-time hydration of the document scope on mount: from the URL (new chat opened via
@@ -176,7 +177,8 @@ export function ChatArea({
           messages: [...messages, userMessage].map(m => ({ role: m.role, content: m.content })),
           stream: true,
           conversationId: conversationId,
-          documentIds: documentIds.length > 0 ? documentIds : undefined
+          documentIds: documentIds.length > 0 ? documentIds : undefined,
+          mode: ragMode,
         })
       })
 
@@ -222,6 +224,11 @@ export function ChatArea({
                     newConversationId = parsed.conversationId
                     setConversationId(parsed.conversationId)
                     window.dispatchEvent(new Event('chat-created'))
+                  }
+                  if (parsed.retrieval) {
+                    setMessages(prev => prev.map(m =>
+                      m.id === assistantId ? { ...m, retrieval: parsed.retrieval } : m
+                    ))
                   }
                 } else if (parsed.type === 'citations') {
                   setMessages(prev => prev.map(m =>
@@ -528,6 +535,22 @@ export function ChatArea({
                 />
 
                 <div className="flex items-center gap-1.5 shrink-0 mb-[1px]">
+                  <select
+                    aria-label="Retrieval mode"
+                    title="Retrieval mode: Auto (Adaptive), Mix (KG + Hybrid), Hybrid (Local + Global KG), Local (Entities), Global (Themes), Fast (Hybrid Chunks)"
+                    value={ragMode}
+                    onChange={(e) => setRagMode(e.target.value as RagMode)}
+                    disabled={isLoading}
+                    className="h-8 rounded-full border border-border/40 bg-muted/50 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                  >
+                    <option value="auto">Auto</option>
+                    <option value="mix">Mix</option>
+                    <option value="hybrid">Hybrid KG</option>
+                    <option value="local">Local</option>
+                    <option value="global">Global</option>
+                    <option value="naive">Fast</option>
+                  </select>
+
                   {speechSupported && (
                     <button
                       type="button"

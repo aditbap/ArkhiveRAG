@@ -5,3 +5,6 @@ export * from './chunk.repository.js';
 export * from './folder.repository.js';
 export * from './membership.repository.js';
 export * from './library.repository.js';
+export * from './knowledge-graph.repository.js';
+export * from './learning.repository.js';
+export * from './community.repository.js';

@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, bigint, boolean, timestamp, jsonb, integer, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, bigint, boolean, timestamp, jsonb, integer, smallint, pgEnum } from 'drizzle-orm/pg-core';
 import { organizations } from './organizations.js';
 import { users } from './users.js';
 import { folders } from './folders.js';
@@ -13,11 +13,16 @@ export const documents = pgTable('documents', {
   fileType: varchar('file_type', { length: 50 }).notNull(),
   fileSizeBytes: bigint('file_size_bytes', { mode: 'number' }).notNull(),
   fileHash: varchar('file_hash', { length: 64 }).notNull(),
+  kgIndexedHash: varchar('kg_indexed_hash', { length: 64 }),
   status: documentStatusEnum('status').default('uploaded').notNull(),
   folderId: uuid('folder_id').references(() => folders.id, { onDelete: 'set null' }),
   activeVersionId: uuid('active_version_id'), // FK self-reference added later or left as UUID
   tags: text('tags').array().default([]),
   metadata: jsonb('metadata').default('{}').notNull(),
+  effectiveAt: timestamp('effective_at', { withTimezone: true }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  supersedesDocumentId: uuid('supersedes_document_id'),
+  authorityTier: smallint('authority_tier').default(2).notNull(),
   uploadedBy: uuid('uploaded_by').references(() => users.id),
   errorMessage: text('error_message'),
   notes: text('notes'),
