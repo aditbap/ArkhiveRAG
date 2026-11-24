@@ -3,13 +3,15 @@ import { EmbeddingProvider, EmbeddingResult } from '@rag/core';
 
 export class GeminiEmbeddingProvider implements EmbeddingProvider {
   public readonly name = 'gemini';
-  public readonly model = process.env.EMBEDDING_MODEL || 'gemini-embedding-2';
-  public readonly dimensions = 768;
-  
+  public readonly model: string;
+  public readonly dimensions: number;
+
   private ai: GoogleGenAI;
 
-  constructor(apiKey?: string) {
+  constructor(apiKey?: string, modelName?: string, dimensions?: number) {
     this.ai = new GoogleGenAI({ apiKey: apiKey || process.env.GEMINI_API_KEY });
+    this.model = modelName || process.env.EMBEDDING_MODEL || 'gemini-embedding-001';
+    this.dimensions = dimensions ?? parseInt(process.env.EMBEDDING_DIMENSIONS || '1024', 10);
   }
 
   async embed(texts: string[]): Promise<EmbeddingResult> {
