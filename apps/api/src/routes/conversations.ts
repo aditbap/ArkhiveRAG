@@ -75,22 +75,32 @@ export const conversationsRoutes: FastifyPluginAsync = async (fastify) => {
       // Fetch citations for these messages
       const messageIds = conversationMessages.map(m => m.id);
       
-      // Find citations and join with document title
+      // Find citations and join with document metadata so reloaded threads preserve full citation chips
       const loadCitations = (ids: string[]) =>
         db.query.citations.findMany({
           where: (citations, { inArray }) => inArray(citations.messageId, ids),
-          with: { document: { columns: { title: true } } },
+          with: { document: { columns: { id: true, title: true, fileName: true, fileType: true } } },
         });
       const messageCitations = messageIds.length > 0 ? await loadCitations(messageIds) : [];
 
       // Format response
       const formattedMessages = conversationMessages.map(m => {
-        const citationsForMsg = messageCitations.filter(c => c.messageId === m.id).map(c => ({
-          index: c.citationIndex,
-          documentTitle: c.document?.title || 'Unknown Document',
-          score: c.relevanceScore,
-          snippet: c.snippet
-        }));
+        const citationsForMsg = messageCitations
+          .filter(c => c.messageId === m.id)
+          .sort((a, b) => a.citationIndex - b.citationIndex)
+          .map(c => ({
+            index: c.citationIndex,
+            document: c.document?.title || 'Unknown Document',
+            documentTitle: c.document?.title || 'Unknown Document',
+            documentId: c.documentId,
+            chunkId: c.chunkId,
+            fileName: c.document?.fileName,
+            fileType: c.document?.fileType,
+            score: c.relevanceScore,
+            pageNumber: c.pageNumber ?? undefined,
+            sectionHeading: c.sectionHeading ?? undefined,
+            snippet: c.snippet,
+          }));
 
         return {
           id: m.id,

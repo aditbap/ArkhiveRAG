@@ -1,7 +1,7 @@
 import { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import '@fastify/multipart';
 import { requirePermissionMiddleware, requireUser, canMutateDocument, type Role } from '@rag/auth';
-import { DocumentRepository, JobRepository, FolderRepository, LibraryRepository } from '@rag/database';
+import { DocumentRepository, JobRepository, FolderRepository, LibraryRepository, KnowledgeGraphRepository } from '@rag/database';
 import { MinioStorageProvider } from '@rag/providers';
 import { ingestionQueue, redisConnection } from '../queue.js';
 import { consumeRateLimit } from '../lib/rate-limit.js';
@@ -29,6 +29,7 @@ const jobRepo = new JobRepository();
 const storage = MinioStorageProvider.fromEnv();
 const folderRepo = new FolderRepository();
 const libraryRepo = new LibraryRepository();
+const kgRepo = new KnowledgeGraphRepository();
 
 /**
  * Enforces the library's document-count and storage quotas. `incomingBytes` is a hint (the request's
@@ -501,6 +502,10 @@ export const documentRoutes: FastifyPluginAsync = async (fastify) => {
       if (!deletedDoc) {
         return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Document not found' } });
       }
+      // Remove deleted document's references from the Knowledge Graph so orphaned entities don't leak into retrieval.
+      await kgRepo.removeDocumentFromGraph(orgId, id).catch((kgErr) => {
+        request.log.warn(kgErr, 'Failed to prune deleted document from Knowledge Graph');
+      });
       await bumpCacheVersion(orgId);
       return { success: true };
     } catch (err) {

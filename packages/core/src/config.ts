@@ -11,12 +11,12 @@ const REQUIRED: Record<ServiceRole, string[]> = {
   api: [
     'DATABASE_URL', 'REDIS_URL', 'KEYCLOAK_URL', 'KEYCLOAK_REALM',
     'MINIO_ENDPOINT', 'MINIO_ACCESS_KEY', 'MINIO_SECRET_KEY', 'MINIO_BUCKET',
-    'CORS_ORIGINS', 'NVIDIA_API_KEY', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN',
+    'CORS_ORIGINS',
   ],
   worker: [
     'DATABASE_URL', 'REDIS_URL',
     'MINIO_ENDPOINT', 'MINIO_ACCESS_KEY', 'MINIO_SECRET_KEY', 'MINIO_BUCKET',
-    'NVIDIA_API_KEY', 'OCR_SERVICE_URL',
+    'OCR_SERVICE_URL',
   ],
 };
 
@@ -47,7 +47,24 @@ export function findProductionConfigProblems(role: ServiceRole, env: NodeJS.Proc
     }
   }
 
+  const hasCloudflare =
+    Boolean(env.CLOUDFLARE_ACCOUNT_ID) &&
+    Boolean(env.CLOUDFLARE_API_TOKEN) &&
+    !PLACEHOLDER.test(env.CLOUDFLARE_ACCOUNT_ID as string) &&
+    !PLACEHOLDER.test(env.CLOUDFLARE_API_TOKEN as string);
+  const hasGemini = Boolean(env.GEMINI_API_KEY) && !PLACEHOLDER.test(env.GEMINI_API_KEY as string);
+  const hasOpenAI = Boolean(env.OPENAI_API_KEY) && !PLACEHOLDER.test(env.OPENAI_API_KEY as string);
+  const hasNvidia = Boolean(env.NVIDIA_API_KEY) && !PLACEHOLDER.test(env.NVIDIA_API_KEY as string);
+
+  if (!hasCloudflare && !hasNvidia && !hasGemini && !hasOpenAI) {
+    problems.push('An embedding provider must be configured (CLOUDFLARE_ACCOUNT_ID+CLOUDFLARE_API_TOKEN, NVIDIA_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY)');
+  }
+
   if (role === 'api') {
+    if (!hasCloudflare && !hasGemini && !hasOpenAI) {
+      problems.push('An LLM provider must be configured (CLOUDFLARE_ACCOUNT_ID+CLOUDFLARE_API_TOKEN, GEMINI_API_KEY, or OPENAI_API_KEY)');
+    }
+
     const origins = (env.CORS_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean);
     if (origins.includes('*')) problems.push("CORS_ORIGINS must list explicit origins, not '*'");
     if (env.KEYCLOAK_URL && !/^https:\/\//.test(env.KEYCLOAK_URL) && env.ALLOW_INSECURE_KEYCLOAK !== 'true') {

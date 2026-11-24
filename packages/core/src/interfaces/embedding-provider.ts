@@ -12,4 +12,10 @@ export interface EmbeddingProvider {
 
   embed(texts: string[]): Promise<EmbeddingResult>;
   embedQuery(text: string): Promise<number[]>;
+  /**
+   * Batch-embeds multiple query strings in a single upstream request.
+   * Inspired by LightRAG's single-batch pre-computation of [query, ll_keywords, hl_keywords]
+   * to avoid 2-3 sequential embedding round-trips per chat turn.
+   */
+  embedQueries?(texts: string[]): Promise<number[][]>;
 }

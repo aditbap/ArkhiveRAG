@@ -46,4 +46,10 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
     }
     return result.embeddings[0];
   }
+
+  async embedQueries(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
+    const result = await this.embed(texts);
+    return result.embeddings;
+  }
 }

@@ -2,6 +2,7 @@ export * from './types/document.js';
 export * from './types/chat.js';
 export * from './types/job.js';
 export * from './types/common.js';
+export * from './types/lightrag.js';
 
 export * from './interfaces/llm-provider.js';
 export * from './interfaces/embedding-provider.js';
@@ -11,3 +12,6 @@ export * from './interfaces/chunker-provider.js';
 export * from './interfaces/storage-provider.js';
 export * from './constants.js';
 export * from './config.js';
+export * from './lightrag/index.js';
+export * from './retrieval/index.js';
+export * from './learning/index.js';

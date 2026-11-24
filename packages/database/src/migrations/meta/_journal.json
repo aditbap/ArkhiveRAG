@@ -64,6 +64,41 @@
       "when": 1788200000000,
       "tag": "0008_query_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1788300000000,
+      "tag": "0009_lightrag_knowledge_graph",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1788400000000,
+      "tag": "0010_hybrid_kg_search_and_bge_m3",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1788500000000,
+      "tag": "0011_corporate_retrieval_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1788600000000,
+      "tag": "0012_retrieval_learning_engine",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1788700000000,
+      "tag": "0013_raptor_communities",
+      "breakpoints": true
     }
   ]
 }

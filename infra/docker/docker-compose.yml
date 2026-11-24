@@ -130,7 +130,7 @@ services:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
-      - "3002:3000" # 3000 is taken by apps/web's Next.js dev server
+      - "3003:3000" # 3000 is taken by apps/web and 3002 by apps/api
     depends_on:
       - prometheus
 
