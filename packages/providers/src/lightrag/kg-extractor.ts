@@ -8,12 +8,14 @@ import {
   buildSummarizeDescriptionsPrompt,
   buildTupleEntityExtractionSystemPrompt,
   buildTupleEntityExtractionUserPrompt,
+  classifyRelationType,
   countDescriptionFragments,
   ENTITY_CONTINUE_EXTRACTION_USER_PROMPT,
   estimateTokens,
   extractEntityCode,
   mergeDescriptionFragments,
   mergeKeywords,
+  normalizeEntityAliasKey,
   parseExtractionOutput,
   resolveInDocumentEntities,
   type ChunkExtractionResult,
@@ -75,6 +77,13 @@ export interface KgPersistenceBridge {
     limit?: number,
   ): Promise<Array<{ canonicalName: string; entityName: string; entityType: string; similarity: number }>>;
   upsertEntityAliases?(orgId: string, aliases: EntityAliasMapping[]): Promise<void>;
+  upsertCosineSynonymyEdges?(
+    orgId: string,
+    entities: MergedEntityInput[],
+    embeddingModel: string,
+    minSimilarity?: number,
+    maxPerEntity?: number,
+  ): Promise<number>;
 }
 
 export interface KgExtractionOptions {
@@ -424,7 +433,13 @@ export class KnowledgeGraphExtractor {
         cur.description = mergeDescriptionFragments(cur.description, [e.description]);
         if (cur.entityType === 'Other' && e.type !== 'Other') cur.entityType = e.type;
         cur.sourceChunkIds.push(chunkId);
+        const normKey = normalizeEntityAliasKey(e.name);
+        if (normKey && cur.normalizedAliases && !cur.normalizedAliases.includes(normKey)) {
+          cur.normalizedAliases.push(normKey);
+        }
+        cur.confidence = Math.min(1, (cur.confidence ?? 0.85) + 0.03);
       } else {
+        const normKey = normalizeEntityAliasKey(e.name);
         entityAcc.set(targetCanonical, {
           entityName: e.name,
           canonicalName: targetCanonical,
@@ -432,6 +447,8 @@ export class KnowledgeGraphExtractor {
           description: mergeDescriptionFragments(null, [e.description]),
           sourceChunkIds: [chunkId],
           documentIds: [documentId],
+          confidence: e.type !== 'Other' ? 0.9 : 0.78,
+          normalizedAliases: normKey ? [normKey] : [],
         });
       }
     }
@@ -442,7 +459,9 @@ export class KnowledgeGraphExtractor {
       if (!srcC || !tgtC || srcC === tgtC) continue;
       let srcName = entityAcc.get(srcC)?.entityName ?? r.source;
       let tgtName = entityAcc.get(tgtC)?.entityName ?? r.target;
-      if (srcC > tgtC) {
+      const mergedKw = mergeKeywords(null, r.keywords);
+      const relMeta = classifyRelationType(mergedKw, r.description);
+      if (!relMeta.isDirected && srcC > tgtC) {
         [srcC, tgtC] = [tgtC, srcC];
         [srcName, tgtName] = [tgtName, srcName];
       }
@@ -453,15 +472,19 @@ export class KnowledgeGraphExtractor {
         cur.keywords = mergeKeywords(cur.keywords, r.keywords);
         cur.description = mergeDescriptionFragments(cur.description, [r.description]);
         cur.sourceChunkIds.push(chunkId);
+        cur.confidence = Math.min(1, (cur.confidence ?? 0.85) + 0.03);
       } else {
         relAcc.set(key, {
           sourceEntity: srcName,
           targetEntity: tgtName,
           sourceCanonical: srcC,
           targetCanonical: tgtC,
-          keywords: mergeKeywords(null, r.keywords),
+          keywords: mergedKw,
           description: mergeDescriptionFragments(null, [r.description]),
           weight: r.weight,
+          relationType: relMeta.relationType,
+          isDirected: relMeta.isDirected,
+          confidence: relMeta.relationType !== 'related' ? 0.9 : 0.82,
           sourceChunkIds: [chunkId],
           documentIds: [documentId],
         });
@@ -580,11 +603,16 @@ export class KnowledgeGraphExtractor {
       }
     }
 
-    // 6. Upsert merged KG & resolved aliases into PostgreSQL
+    // 6. Upsert merged KG, resolved aliases, and automatic cosine synonymy edges into PostgreSQL
     await this.bridge.upsertEntities(orgId, entitiesList, this.embedder.model);
     await this.bridge.upsertRelations(orgId, relationsList, this.embedder.model);
     if (this.bridge.upsertEntityAliases && resolvedAliasesToPersist.length > 0) {
       await this.bridge.upsertEntityAliases(orgId, resolvedAliasesToPersist).catch(() => undefined);
+    }
+    if (this.bridge.upsertCosineSynonymyEdges && entitiesList.length > 0) {
+      await this.bridge
+        .upsertCosineSynonymyEdges(orgId, entitiesList, this.embedder.model, 0.82, 2)
+        .catch(() => 0);
     }
 
     return {

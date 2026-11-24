@@ -70,6 +70,7 @@ update-*.js
 update-*.ts
 *.md
 !README.md
+!BENCHMARK.md
 !CHANGELOG.md
 !CONTRIBUTING.md
 !SECURITY.md

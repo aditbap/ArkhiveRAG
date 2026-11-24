@@ -99,6 +99,13 @@
       "when": 1788700000000,
       "tag": "0013_raptor_communities",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1788800000000,
+      "tag": "0014_governance_kg_fts_hardening",
+      "breakpoints": true
     }
   ]
 }

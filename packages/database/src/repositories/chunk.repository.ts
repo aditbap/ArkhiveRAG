@@ -15,6 +15,28 @@ export interface InsertChunkInput {
   metadata?: Record<string, unknown>;
 }
 
+export interface GovernanceRetrievalFilter {
+  includeDrafts?: boolean;
+  includeArchived?: boolean;
+  asOfDate?: Date | null;
+}
+
+function buildGovernanceConditions(filter?: GovernanceRetrievalFilter) {
+  const conds = [];
+  if (!filter?.includeDrafts) {
+    conds.push(ne(documents.governanceStatus, 'draft'));
+  }
+  if (!filter?.includeArchived) {
+    conds.push(ne(documents.governanceStatus, 'archived'));
+  }
+  if (filter?.asOfDate) {
+    const iso = filter.asOfDate.toISOString();
+    conds.push(sql`(${documents.effectiveAt} IS NULL OR ${documents.effectiveAt} <= ${iso}::timestamptz)`);
+    conds.push(sql`(${documents.expiresAt} IS NULL OR ${documents.expiresAt} > ${iso}::timestamptz)`);
+  }
+  return conds;
+}
+
 export class ChunkRepository extends BaseRepository {
   constructor() {
     super('document_chunks');
@@ -177,6 +199,7 @@ export class ChunkRepository extends BaseRepository {
     queryEmbedding: number[],
     limit = 20,
     documentIds?: string[],
+    governance?: GovernanceRetrievalFilter,
   ) {
     const uniqueIds = [...new Set(chunkIds.filter(Boolean))];
     if (uniqueIds.length === 0) return [];
@@ -188,6 +211,7 @@ export class ChunkRepository extends BaseRepository {
       eq(documents.isDeleted, false),
       inArray(documentChunks.id, uniqueIds),
       sql`${documentChunks.embedding} IS NOT NULL`,
+      ...buildGovernanceConditions(governance),
     ];
 
     if (documentIds && documentIds.length > 0) {
@@ -233,6 +257,7 @@ export class ChunkRepository extends BaseRepository {
     limit: number = 5,
     minSimilarity: number = 0.5,
     documentIds?: string[],
+    governance?: GovernanceRetrievalFilter,
   ) {
     const similarity = sql<number>`1 - (${documentChunks.embedding} <=> ${JSON.stringify(embedding)}::vector)`;
 
@@ -243,6 +268,7 @@ export class ChunkRepository extends BaseRepository {
       eq(documents.isDeleted, false),
       sql`${documentChunks.embedding} IS NOT NULL`,
       gte(similarity, minSimilarity),
+      ...buildGovernanceConditions(governance),
     ];
 
     if (documentIds && documentIds.length > 0) {
@@ -265,58 +291,83 @@ export class ChunkRepository extends BaseRepository {
   }
 
   /**
-   * Multilingual-safe full-text (BM25-ish) search using Postgres's built-in text search.
-   * Combines the `english` GIN index (migration 0005) with the language-agnostic `simple`
-   * GIN index (migration 0009) so both English stemmed queries AND non-English / exact-code
-   * queries (e.g. Indonesian questions, policy/SKU codes) match cleanly.
+   * Multilingual-safe, 10k-doc-scalable full-text search using the precomputed `content_tsv`
+   * GIN index (migration 0014):
+   * 1. Runs strict AND `plainto_tsquery` over code-prioritized significant terms first (<20ms at 10k docs).
+   * 2. Falls back to stopword-filtered OR-tsquery only when fewer than 3 chunks match.
    */
-  async searchFullText(orgId: string, query: string, limit: number = 15, documentIds?: string[]) {
+  async searchFullText(
+    orgId: string,
+    query: string,
+    limit: number = 15,
+    documentIds?: string[],
+    governance?: GovernanceRetrievalFilter,
+  ) {
     const sanitized = query.replace(/[^\p{L}\p{N}\s_-]+/gu, ' ').trim();
     if (!sanitized) return [];
 
-    // Strip high-frequency English/Indonesian stopwords BEFORE constructing the OR-tsquery on
-    // the language-agnostic 'simple' GIN index. Without this, words like "the"/"is"/"in" match
-    // 100% of rows at 10,000+ docs and force Postgres to score every chunk (900ms -> ~15ms!).
     const significant = extractSignificantTerms(sanitized).slice(0, 8);
     const simpleQueryText = significant.length > 0 ? significant.join(' ') : sanitized;
 
-    const tsqueryEn = sql`NULLIF(replace(plainto_tsquery('english', ${sanitized})::text, ' & ', ' | '), '')::tsquery`;
-    const tsquerySimple = sql`NULLIF(replace(plainto_tsquery('simple', ${simpleQueryText})::text, ' & ', ' | '), '')::tsquery`;
-    const tsvectorEn = sql`to_tsvector('english', ${documentChunks.content})`;
-    const tsvectorSimple = sql`to_tsvector('simple', ${documentChunks.content})`;
+    const runQuery = async (useAnd: boolean, useStoredTsv: boolean) => {
+      const tsvSimple = useStoredTsv
+        ? sql`${documentChunks}.content_tsv`
+        : sql`to_tsvector('simple', ${documentChunks.content})`;
+      const tsvEn = sql`to_tsvector('english', ${documentChunks.content})`;
+      const tsquerySimple = useAnd
+        ? sql`NULLIF(plainto_tsquery('simple', ${simpleQueryText})::text, '')::tsquery`
+        : sql`NULLIF(replace(plainto_tsquery('simple', ${simpleQueryText})::text, ' & ', ' | '), '')::tsquery`;
+      const tsqueryEn = useAnd
+        ? sql`NULLIF(plainto_tsquery('english', ${sanitized})::text, '')::tsquery`
+        : sql`NULLIF(replace(plainto_tsquery('english', ${sanitized})::text, ' & ', ' | '), '')::tsquery`;
 
-    const rank = sql<number>`GREATEST(
-      COALESCE(ts_rank_cd(${tsvectorEn}, ${tsqueryEn}), 0),
-      COALESCE(ts_rank_cd(${tsvectorSimple}, ${tsquerySimple}), 0)
-    )`;
+      const rank = useStoredTsv
+        ? sql<number>`COALESCE(ts_rank_cd(${tsvSimple}, ${tsquerySimple}), 0)`
+        : sql<number>`GREATEST(
+            COALESCE(ts_rank_cd(${tsvEn}, ${tsqueryEn}), 0),
+            COALESCE(ts_rank_cd(${tsvSimple}, ${tsquerySimple}), 0)
+          )`;
 
-    const conditions = [
-      eq(documentChunks.orgId, orgId),
-      eq(documentChunks.isActive, true),
-      ne(documentChunks.chunkRole, 'parent'),
-      eq(documents.isDeleted, false),
-      or(
-        sql`(${tsqueryEn} IS NOT NULL AND ${tsvectorEn} @@ ${tsqueryEn})`,
-        sql`(${tsquerySimple} IS NOT NULL AND ${tsvectorSimple} @@ ${tsquerySimple})`,
-      ),
-    ];
+      const matchCond = useStoredTsv
+        ? sql`(${tsquerySimple} IS NOT NULL AND ${tsvSimple} @@ ${tsquerySimple})`
+        : or(
+            sql`(${tsqueryEn} IS NOT NULL AND ${tsvEn} @@ ${tsqueryEn})`,
+            sql`(${tsquerySimple} IS NOT NULL AND ${tsvSimple} @@ ${tsquerySimple})`,
+          );
 
-    if (documentIds && documentIds.length > 0) {
-      conditions.push(inArray(documentChunks.documentId, documentIds));
+      const conditions = [
+        eq(documentChunks.orgId, orgId),
+        eq(documentChunks.isActive, true),
+        ne(documentChunks.chunkRole, 'parent'),
+        eq(documents.isDeleted, false),
+        ...buildGovernanceConditions(governance),
+        matchCond,
+      ];
+
+      if (documentIds && documentIds.length > 0) {
+        conditions.push(inArray(documentChunks.documentId, documentIds));
+      }
+
+      return this.db
+        .select({
+          chunk: documentChunks,
+          document: documents,
+          rank,
+        })
+        .from(documentChunks)
+        .innerJoin(documents, eq(documentChunks.documentId, documents.id))
+        .where(and(...conditions))
+        .orderBy(desc(rank))
+        .limit(limit);
+    };
+
+    try {
+      const strictHits = await runQuery(true, true);
+      if (strictHits.length >= Math.min(3, limit)) return strictHits;
+      return await runQuery(false, true);
+    } catch {
+      // Graceful fallback if migration 0014 (`content_tsv`) has not yet been applied
+      return runQuery(false, false);
     }
-
-    const results = await this.db
-      .select({
-        chunk: documentChunks,
-        document: documents,
-        rank,
-      })
-      .from(documentChunks)
-      .innerJoin(documents, eq(documentChunks.documentId, documents.id))
-      .where(and(...conditions))
-      .orderBy(desc(rank))
-      .limit(limit);
-
-    return results;
   }
 }

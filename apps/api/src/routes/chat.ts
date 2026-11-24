@@ -24,7 +24,9 @@ import {
   CONSTANTS,
   CRAG_LOW_CONFIDENCE_DIRECTIVE,
   buildLightRagSystemPrompt,
+  compressConversationHistory,
   isRagQueryMode,
+  sanitizeConversationHistory,
   type EmbeddingProvider,
   type RagQueryMode,
   type RerankerProvider,
@@ -386,6 +388,15 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
           action: retrieval.crag.action,
           confidence: Number(retrieval.crag.confidence.toFixed(3)),
         },
+        ambiguity: retrieval.ambiguity,
+        facets: {
+          isMultilingual: retrieval.facets.isMultilingual,
+          isHistorical: retrieval.facets.allowHistorical,
+          isFollowUp: retrieval.facets.isFollowUp,
+          isAggregation: retrieval.facets.isAggregation,
+          exactCodes: retrieval.facets.exactCodes,
+        },
+        pprPaths: retrieval.pprPaths.slice(0, 3),
         entitiesCount: assembled.entitiesUsed.length,
         relationsCount: assembled.relationsUsed.length,
         chunksCount: assembled.chunksUsed.length,
@@ -428,10 +439,15 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         contextText: assembled.contextText,
         hasGraphData: assembled.entitiesUsed.length > 0 || assembled.relationsUsed.length > 0,
       });
+      const promptAddenda: string[] = [];
+      if (retrieval.crag.action === 'abstain_hint') {
+        promptAddenda.push(CRAG_LOW_CONFIDENCE_DIRECTIVE);
+      }
+      if (retrieval.ambiguity.isAmbiguous && retrieval.ambiguity.clarificationHint) {
+        promptAddenda.push(`AMBIGUITY GUIDANCE: ${retrieval.ambiguity.clarificationHint}`);
+      }
       const systemPrompt =
-        retrieval.crag.action === 'abstain_hint'
-          ? `${baseSystemPrompt}\n\n${CRAG_LOW_CONFIDENCE_DIRECTIVE}`
-          : baseSystemPrompt;
+        promptAddenda.length > 0 ? `${baseSystemPrompt}\n\n${promptAddenda.join('\n\n')}` : baseSystemPrompt;
 
       const queryLlm = getQueryLlmProvider();
       const mainGen = rootSpan.generation({
@@ -440,12 +456,20 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         input: systemPrompt,
       });
 
+      // Sanitize prior turns against injected directives & compress long history under strict token cap
+      const { sanitized: safePriorHistory } = sanitizeConversationHistory(priorHistory);
+      const boundedHistory = compressConversationHistory(safePriorHistory, {
+        keepRecentMessages: 4,
+        maxHistoryTokens: 1200,
+      });
+
       const llmMessages: LLMMessage[] = [
         { role: 'system', content: systemPrompt },
-        ...incomingMessages.map((m) => ({
+        ...boundedHistory.map((m) => ({
           role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
           content: m.content,
         })),
+        { role: 'user', content: userQuery },
       ];
 
       const userMessageId = crypto.randomUUID();

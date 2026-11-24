@@ -6,27 +6,39 @@ import {
   buildSlimKeywordsPrompt,
   buildUnifiedDecomposePrompt,
   buildUnifiedQueryAnalysisPrompt,
+  calibrateDenseScores,
   classifyQueryIntent,
+  computeAdaptiveTopK,
   computeExactCodeMatchScore,
   computeHeadingMatchScore,
   computePersonalizedPageRank,
+  detectQueryAmbiguity,
+  enrichPronounQueryWithHistory,
   evaluateCragConfidence,
   extractSignificantTerms,
+  isTopicContinuation,
+  lockExactCodesInQuery,
   parseDecomposeOutput,
   parseQueryAnalysisOutput,
   parseTemporalIntent,
   propagatePprToChunks,
   resolveTemporalAndAuthorityConflicts,
   roundRobinMerge,
+  sanitizeConversationHistory,
   scoreCandidateWithLtr,
+  selectDiverseNonDuplicateCandidates,
   shouldDecomposeQuery,
+  traceTopPprPaths,
   weightedReciprocalRankFusion,
+  type AmbiguityAssessment,
   type AssembledContext,
   type ConcreteRagQueryMode,
   type ContextChunkInput,
   type CragEvaluation,
   type EmbeddingProvider,
+  type PprPathTrace,
   type QueryAnalysisResult,
+  type QueryFeatures,
   type QueryIntent,
   type RagQueryMode,
   type RerankerProvider,
@@ -85,6 +97,10 @@ export interface LightRagRetrievalInput {
   strategyOverride?: RetrievalStrategyName;
   /** Disable CRAG retry loop when benchmarking a fixed single-pass strategy. */
   disableCragRetry?: boolean;
+  /** Optional governance visibility overrides (drafts are excluded by default). */
+  includeDrafts?: boolean;
+  /** Optional point-in-time validity date (`asOfDate`) for historical policy lookups. */
+  asOfDate?: Date | null;
 }
 
 export interface LightRagRetrievalResult {
@@ -92,10 +108,14 @@ export interface LightRagRetrievalResult {
   effectiveMode: ConcreteRagQueryMode;
   routingReason: string;
   intent: QueryIntent;
+  facets: QueryFeatures;
   strategy: RetrievalStrategyName;
   configVersion: number;
   subQueries: string[];
   crag: CragEvaluation;
+  ambiguity: AmbiguityAssessment;
+  pprPaths: PprPathTrace[];
+  historyInjectionsNeutralized: number;
   communitiesUsed: CommunitySummaryHit[];
   candidateFeatures: CandidateFeatureRecord[];
   analysis: QueryAnalysisResult;
@@ -269,10 +289,11 @@ export class LightRagRetriever {
     denseWeight: number,
     bm25Weight: number,
     documentIds?: string[],
+    governance?: { includeDrafts?: boolean; includeArchived?: boolean; asOfDate?: Date | null },
   ): Promise<InternalCandidate[]> {
     const [denseResults, ftsResults] = await Promise.all([
-      this.chunkRepo.searchSimilar(orgId, queryEmbedding, chunkTopK, cosineThreshold, documentIds),
-      this.chunkRepo.searchFullText(orgId, queryText, chunkTopK, documentIds),
+      this.chunkRepo.searchSimilar(orgId, queryEmbedding, chunkTopK, cosineThreshold, documentIds, governance),
+      this.chunkRepo.searchFullText(orgId, queryText, chunkTopK, documentIds, governance),
     ]);
 
     const denseById = new Map(denseResults.map((r) => [r.chunk.id, r.similarity]));
@@ -299,6 +320,7 @@ export class LightRagRetriever {
         expiresAt?: Date | string | null;
         supersedesDocumentId?: string | null;
         authorityTier?: number | null;
+        governanceStatus?: string | null;
       };
       const ch = item.chunk as typeof item.chunk & {
         parentChunkId?: string | null;
@@ -321,6 +343,7 @@ export class LightRagRetriever {
         expiresAt: doc.expiresAt ?? null,
         supersedesDocumentId: doc.supersedesDocumentId ?? null,
         authorityTier: doc.authorityTier ?? null,
+        governanceStatus: doc.governanceStatus ?? 'active',
         createdAt: item.document.createdAt,
         updatedAt: item.document.updatedAt,
         similarity: score,
@@ -348,7 +371,11 @@ export class LightRagRetriever {
     const totalStart = Date.now();
     const config = input.retrievalConfig ?? DEFAULT_RETRIEVAL_CONFIG;
     const requestedMode: RagQueryMode = input.mode ?? CONSTANTS.DEFAULT_RAG_MODE;
-    const history = input.history ?? [];
+    // Sanitize conversation history against injected directives & prevent topic-shift contamination
+    const { sanitized: sanitizedHistory, injectionsNeutralized: historyInjectionsNeutralized } =
+      sanitizeConversationHistory(input.history ?? []);
+    const topicContinues = isTopicContinuation(input.userQuery, sanitizedHistory);
+    const history = topicContinues ? sanitizedHistory : [];
 
     // 1. Sub-1ms Intent Classification & Strategy Resolution
     const plan = classifyQueryIntent(requestedMode, input.userQuery, history, config);
@@ -395,6 +422,12 @@ export class LightRagRetriever {
     let precomputedQueryEmbedding: number[] | undefined;
     let precomputedDirectChunks: InternalCandidate[] | undefined;
 
+    const governanceFilter = {
+      includeDrafts: Boolean(input.includeDrafts),
+      includeArchived: plan.features.allowHistorical,
+      asOfDate: input.asOfDate ?? null,
+    };
+
     if (useKg && wantDirectChunks && history.length === 0) {
       const specStart = Date.now();
       const [analysisRes, specChunkRes] = await Promise.all([
@@ -411,6 +444,7 @@ export class LightRagRetriever {
             profile.stage1.dense,
             profile.stage1.bm25,
             input.documentIds,
+            governanceFilter,
           );
           return { qVec, chunks };
         })(),
@@ -428,7 +462,15 @@ export class LightRagRetriever {
       queryAnalysisMs = Date.now() - analysisStart;
     }
 
-    const standaloneQuery = analysis.standaloneQuery || input.userQuery;
+    const rawStandalone = analysis.standaloneQuery || input.userQuery;
+    const historyResolved =
+      history.length > 0 &&
+      plan.features.hasHistoryPronoun &&
+      rawStandalone.trim().toLowerCase() === input.userQuery.trim().toLowerCase()
+        ? enrichPronounQueryWithHistory(rawStandalone, history)
+        : rawStandalone;
+    // Deterministic pre-LLM identifier lock: guarantees rewrites never drop exact corporate codes
+    const standaloneQuery = lockExactCodesInQuery(input.userQuery, historyResolved);
     const rawLl = analysis.lowLevelKeywords.join(', ');
     const rawHl = analysis.highLevelKeywords.join(', ');
     const entityQuery = wantLocal ? rawLl || rawHl || standaloneQuery : '';
@@ -564,6 +606,7 @@ export class LightRagRetriever {
             profile.stage1.dense,
             profile.stage1.bm25,
             input.documentIds,
+            governanceFilter,
           )
           : Promise.resolve<InternalCandidate[]>([]),
       subQueryChunksBranch(),
@@ -603,15 +646,69 @@ export class LightRagRetriever {
       (r) => `${r.sourceCanonical}::${r.targetCanonical}`,
     );
 
-    // 5b. Graph-Aware Personalized PageRank (#1) over ACL-filtered 2-hop tenant subgraph
+    // 5b. Graph-Aware Personalized PageRank (#1) + Anchor-Guided Pseudo-Relevance Graph Bridging (PRGB)
+    // Seeds PPR from BOTH IDF-weighted query entities AND high-specificity bridge entities anchored
+    // in the top direct hybrid chunks (strictly skipped in `local`/`hybrid` modes so KG-only modes stay self-sufficient).
     const pprStart = Date.now();
     let pprChunkScores = new Map<string, number>();
-    if (useKg && mergedEntities.length > 0 && typeof this.kgRepo.getTenantSubgraph === 'function') {
+    let pprPaths: PprPathTrace[] = [];
+    const codeAnchorIds =
+      wantDirectChunks && plan.features.exactCodes.length > 0
+        ? directChunks
+            .filter(
+              (c) =>
+                computeExactCodeMatchScore(plan.features.exactCodes, c.content, c.documentTitle) > 0,
+            )
+            .map((c) => c.id)
+        : [];
+    const anchorChunkIds = wantDirectChunks
+      ? [...new Set([...codeAnchorIds, ...directChunks.slice(0, 3).map((c) => c.id)])].slice(0, 4)
+      : [];
+    let anchorEntities: RetrievedEntity[] = [];
+    if (
+      useKg &&
+      wantDirectChunks &&
+      anchorChunkIds.length > 0 &&
+      typeof this.kgRepo.getEntitiesBySourceChunkIds === 'function'
+    ) {
+      try {
+        anchorEntities = await this.kgRepo.getEntitiesBySourceChunkIds(
+          input.orgId,
+          anchorChunkIds,
+          18,
+          input.documentIds,
+        );
+      } catch {
+        anchorEntities = [];
+      }
+    }
+
+    if (useKg && (mergedEntities.length > 0 || anchorEntities.length > 0) && typeof this.kgRepo.getTenantSubgraph === 'function') {
       const seedWeights = new Map<string, number>();
-      mergedEntities.slice(0, 15).forEach((entity, idx) => {
-        const w = Math.max(0.05, entity.similarity) * (1 / (1 + idx * 0.15));
+
+      // Primary query-matched entity seeds (bounded IDF prevents mega-hubs without crushing key entities)
+      mergedEntities.slice(0, 12).forEach((entity, idx) => {
+        const docSpread = Math.max(1, entity.documentIds?.length ?? entity.sourceChunkIds.length);
+        const idf = Math.max(0.25, Math.min(1.0, 1 / Math.log2(2 + docSpread)));
+        const w = Math.max(0.05, entity.similarity) * (1 / (1 + idx * 0.25)) * idf;
         seedWeights.set(entity.canonicalName, (seedWeights.get(entity.canonicalName) ?? 0) + w);
       });
+
+      // Anchor-chunk bridge entity seeds: only specific entities (docSpread <= 5) so bridges jump cleanly
+      const anchorRankByChunk = new Map(anchorChunkIds.map((id, i) => [id, i]));
+      for (const entity of anchorEntities) {
+        const docSpread = Math.max(1, entity.documentIds?.length ?? entity.sourceChunkIds.length);
+        if (docSpread > 5) continue;
+        let bestAnchorRank = 2;
+        for (const cid of entity.sourceChunkIds) {
+          const r = anchorRankByChunk.get(cid);
+          if (r !== undefined && r < bestAnchorRank) bestAnchorRank = r;
+        }
+        const idf = Math.max(0.25, Math.min(1.0, 1 / Math.log2(2 + docSpread)));
+        const anchorBoost = (0.95 / (1 + bestAnchorRank * 0.45)) * idf;
+        seedWeights.set(entity.canonicalName, (seedWeights.get(entity.canonicalName) ?? 0) + anchorBoost);
+      }
+
       try {
         const subgraph = await this.kgRepo.getTenantSubgraph(input.orgId, [...seedWeights.keys()], {
           maxHops: 2,
@@ -619,6 +716,7 @@ export class LightRagRetriever {
           documentIds: input.documentIds,
         });
         if (subgraph.edges.length > 0) {
+          // Adaptive hub dampening (omitting hubDampening lets PPR calibrate to graph density in [0.35, 0.70])
           const ppr = computePersonalizedPageRank(subgraph.edges, seedWeights, {
             damping: 0.85,
             iterations: 12,
@@ -628,6 +726,7 @@ export class LightRagRetriever {
             entityChunks: subgraph.entityChunks,
             edges: subgraph.edges,
           });
+          pprPaths = traceTopPprPaths(subgraph.edges, [...seedWeights.keys()], ppr.nodeScores, 5);
         }
       } catch {
         /* PPR is additive; gracefully degrade if subgraph lookup fails */
@@ -635,31 +734,40 @@ export class LightRagRetriever {
     }
     const pprMs = Date.now() - pprStart;
 
-    // 6. Provenance chunk collection across Entities, Relations, and PPR bridge chunks
-    const entityChunkStats = new Map<string, { bestRank: number; freq: number }>();
-    mergedEntities.forEach((entity, rank) => {
+    // 6. IDF-Dampened Provenance Chunk Collection across Entities, Relations, and PPR Bridge Chunks
+    const entityChunkStats = new Map<string, { bestScore: number; bestRank: number; freq: number }>();
+    mergedEntities.slice(0, 12).forEach((entity, rank) => {
+      const docSpread = Math.max(1, entity.documentIds?.length ?? entity.sourceChunkIds.length);
+      const idf = 1 / Math.log2(2 + docSpread);
+      const precisionHit = (1 / (1 + rank * 0.35)) * Math.min(1, idf * 1.45);
       for (const cid of entity.sourceChunkIds.slice(0, CONSTANTS.DEFAULT_RELATED_CHUNKS_PER_ITEM)) {
         const cur = entityChunkStats.get(cid);
         if (cur) {
           cur.freq++;
           cur.bestRank = Math.min(cur.bestRank, rank);
+          cur.bestScore = Math.max(cur.bestScore, precisionHit);
         } else {
-          entityChunkStats.set(cid, { bestRank: rank, freq: 1 });
+          entityChunkStats.set(cid, { bestScore: precisionHit, bestRank: rank, freq: 1 });
         }
       }
     });
 
-    const relationChunkStats = new Map<string, { bestRank: number; freq: number; bridgeBoost: number }>();
-    mergedRelations.forEach((rel, rank) => {
+    const relationChunkStats = new Map<string, { bestScore: number; bestRank: number; freq: number; bridgeBoost: number }>();
+    mergedRelations.slice(0, 12).forEach((rel, rank) => {
       const isCrossDocBridge = rel.documentIds.length > 1;
+      const docSpread = Math.max(1, rel.documentIds?.length ?? rel.sourceChunkIds.length);
+      const idf = 1 / Math.log2(2 + docSpread);
+      const precisionHit = (1 / (1 + rank * 0.35)) * Math.min(1, idf * 1.45);
       for (const cid of rel.sourceChunkIds.slice(0, CONSTANTS.DEFAULT_RELATED_CHUNKS_PER_ITEM)) {
         const cur = relationChunkStats.get(cid);
         if (cur) {
           cur.freq++;
           cur.bestRank = Math.min(cur.bestRank, rank);
+          cur.bestScore = Math.max(cur.bestScore, precisionHit);
           if (isCrossDocBridge) cur.bridgeBoost = Math.max(cur.bridgeBoost, 0.12);
         } else {
           relationChunkStats.set(cid, {
+            bestScore: precisionHit,
             bestRank: rank,
             freq: 1,
             bridgeBoost: isCrossDocBridge ? 0.12 : 0,
@@ -689,6 +797,7 @@ export class LightRagRetriever {
         queryEmbedding,
         kgFetchQuota,
         input.documentIds,
+        governanceFilter,
       );
 
       const maxEntityFreq = Math.max(1, ...[...entityChunkStats.values()].map((s) => s.freq));
@@ -728,8 +837,8 @@ export class LightRagRetriever {
           updatedAt: row.document.updatedAt,
           denseSim: row.similarity,
           bm25Norm: 0,
-          entityHit: eStat ? 1 / (1 + eStat.bestRank * 0.25) : 0,
-          relationHit: rStat ? 1 / (1 + rStat.bestRank * 0.25) : 0,
+          entityHit: eStat ? eStat.bestScore : 0,
+          relationHit: rStat ? rStat.bestScore : 0,
           pprScore,
           maxsimScore: row.similarity,
           crossEncoderScore: 0,
@@ -737,17 +846,15 @@ export class LightRagRetriever {
         };
 
         if (eStat) {
-          const rankScore = 1 / (1 + eStat.bestRank * 0.25);
           const freqScore = eStat.freq / maxEntityFreq;
-          const combined = 0.72 * row.similarity + 0.10 * rankScore + 0.06 * freqScore + 0.12 * pprScore;
+          const combined = 0.72 * row.similarity + 0.10 * eStat.bestScore + 0.06 * freqScore + 0.12 * pprScore;
           entityChunks.push({ ...baseCandidate, similarity: combined, source: 'entity' });
         }
 
         if (rStat && !eStat) {
-          const rankScore = 1 / (1 + rStat.bestRank * 0.25);
           const freqScore = rStat.freq / maxRelFreq;
           const combined =
-            0.70 * row.similarity + 0.10 * rankScore + 0.05 * freqScore + rStat.bridgeBoost * 0.4 + 0.12 * pprScore;
+            0.70 * row.similarity + 0.10 * rStat.bestScore + 0.05 * freqScore + rStat.bridgeBoost * 0.4 + 0.12 * pprScore;
           relationChunks.push({ ...baseCandidate, similarity: combined, source: 'relation' });
         }
 
@@ -862,12 +969,23 @@ export class LightRagRetriever {
     }
     const rerankMs = Date.now() - rerankStart;
 
-    // 8. Temporal & Authority Conflict Resolution (#10) + 12-Feature LTR Scoring (#12)
+    // 8. Temporal & Authority Conflict Resolution (#10) + Query-Adaptive Calibration + 12-Feature LTR (#12)
     const temporalIntent = parseTemporalIntent(standaloneQuery);
     const temporalAnnotations = resolveTemporalAndAuthorityConflicts(candidates, temporalIntent);
     const queryTerms = extractSignificantTerms(standaloneQuery);
+    const effectiveExactCodes = [
+      ...new Set([
+        ...plan.features.exactCodes,
+        ...[...standaloneQuery.matchAll(/\b([A-Z]{2,6}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})?)\b/g)]
+          .map((m) => m[1]!)
+          .filter(Boolean),
+      ]),
+    ];
 
-    // Compute parent-coherence support (count of sibling child chunks hitting the same parent)
+    // Calibrate dense similarities per query to counter embedding anisotropy (narrow cosine cones)
+    const calibratedDense = calibrateDenseScores(candidates.map((c) => c.denseSim));
+
+    // Compute parent-coherence support (strictly for real parent-child chunks, neutral 0.5 for standalone)
     const parentHitCounts = new Map<string, number>();
     for (const c of candidates) {
       if (c.parentChunkId) {
@@ -876,24 +994,30 @@ export class LightRagRetriever {
     }
 
     const scoredWithFeatures: Array<{ candidate: InternalCandidate; features: RetrievalFeatureVector; finalScore: number }> = [];
-    for (const c of candidates) {
+    for (let idx = 0; idx < candidates.length; idx++) {
+      const c = candidates[idx]!;
       const tAnn = temporalAnnotations.get(c.documentId);
-      const versionActive = tAnn ? (tAnn.isSuperseded ? 0.0 : tAnn.isExpired ? 0.3 : 1.0) : 1.0;
-      const parentHits = c.parentChunkId ? parentHitCounts.get(c.parentChunkId) ?? 1 : c.siblingHits;
+      const versionActive = tAnn ? tAnn.versionMatchScore : 1.0;
+      const parentCoherence = c.parentChunkId
+        ? Math.min(1, (parentHitCounts.get(c.parentChunkId) ?? 1) / 3)
+        : 0.5;
+      const denseCal = calibratedDense[idx] ?? Math.max(0, Math.min(1, c.denseSim));
 
       const features: RetrievalFeatureVector = {
-        denseSim: Math.max(0, Math.min(1, c.denseSim)),
+        denseSim: denseCal,
         bm25Norm: Math.max(0, Math.min(1, c.bm25Norm)),
         entityHit: Math.max(0, Math.min(1, c.entityHit)),
         relationHit: Math.max(0, Math.min(1, c.relationHit)),
         pprScore: Math.max(0, Math.min(1, c.pprScore)),
-        crossEncoderScore: usedCrossEncoder ? c.crossEncoderScore : Math.max(0, Math.min(1, c.denseSim)),
+        crossEncoderScore: usedCrossEncoder
+          ? c.crossEncoderScore
+          : Math.max(0, Math.min(1, 0.5 * denseCal + 0.5 * Math.max(0, Math.min(1, c.bm25Norm)))),
         recencyScore: tAnn?.recencyScore ?? 0.7,
         authorityScore: tAnn?.authorityScore ?? 0.5,
         versionActive,
         headingMatch: computeHeadingMatchScore(queryTerms, c.sectionHeading),
-        exactCodeMatch: computeExactCodeMatchScore(plan.features.exactCodes, c.content, c.documentTitle),
-        parentCoherence: Math.min(1, parentHits / 3),
+        exactCodeMatch: computeExactCodeMatchScore(effectiveExactCodes, c.content, c.documentTitle),
+        parentCoherence,
       };
 
       const rawLtr = scoreCandidateWithLtr(features, profile.ltr);
@@ -908,16 +1032,39 @@ export class LightRagRetriever {
 
     scoredWithFeatures.sort((a, b) => b.finalScore - a.finalScore);
 
-    // Prune noisy tail below minRelevanceScore (keeps token usage lean & prevents irrelevant padding)
-    let keptScored = scoredWithFeatures.filter((s) => s.finalScore >= rerankMinScore).slice(0, rerankLimit);
-    if (keptScored.length === 0 && scoredWithFeatures.length > 0) {
-      keptScored = scoredWithFeatures.slice(0, Math.min(3, rerankLimit));
-    }
+    // Post-LTR near-duplicate suppression, per-document diversity cap, and adaptive Top-K
+    const aboveFloor = scoredWithFeatures.filter((s) => s.finalScore >= rerankMinScore);
+    const poolForSelection = aboveFloor.length > 0 ? aboveFloor : scoredWithFeatures.slice(0, Math.min(3, rerankLimit));
+
+    const adaptiveLimit = computeAdaptiveTopK(
+      intent,
+      rerankLimit,
+      poolForSelection.map((s) => s.finalScore),
+      (poolForSelection[0]?.features.exactCodeMatch ?? 0) >= 1,
+    );
+    const maxPerDocument =
+      intent === 'exact_lookup' || intent === 'factual' ? 3 : 2;
+
+    let keptScored = selectDiverseNonDuplicateCandidates(
+      poolForSelection.map((s) => ({
+        id: s.candidate.id,
+        documentId: s.candidate.documentId,
+        content: s.candidate.content,
+        finalScore: s.finalScore,
+        ref: s,
+      })),
+      { limit: adaptiveLimit, maxPerDocument, nearDuplicateThreshold: 0.85 },
+    ).map((x) => x.ref);
 
     // 9. Bounded CRAG Confidence Gate (#6 — Zero LLM grading, max 1 escalation retry)
+    // Uses unstretched raw denseSim cap alongside LTR finalScore so flat low-sim noise never fools CRAG.
     const crag = evaluateCragConfidence(
       standaloneQuery,
-      keptScored.map((s) => ({ id: s.candidate.id, content: s.candidate.content, score: s.finalScore })),
+      keptScored.map((s) => ({
+        id: s.candidate.id,
+        content: s.candidate.content,
+        score: Math.min(s.finalScore, Math.max(s.candidate.denseSim, s.candidate.bm25Norm * 0.75, s.features.exactCodeMatch)),
+      })),
       {
         highConfidenceThreshold: config.crag.highConfidenceThreshold,
         lowConfidenceThreshold: config.crag.lowConfidenceThreshold,
@@ -938,6 +1085,17 @@ export class LightRagRetriever {
       const cutoff = (keptScored[0]?.finalScore ?? 0) * 0.55;
       keptScored = keptScored.filter((s, idx) => idx < 2 || s.finalScore >= cutoff);
     }
+
+    const ambiguity = detectQueryAmbiguity({
+      query: input.userQuery,
+      hasHistoryAnchor: history.length > 0,
+      exactCodes: effectiveExactCodes,
+      topCandidates: keptScored.slice(0, 3).map((s) => ({
+        documentId: s.candidate.documentId,
+        documentTitle: s.candidate.documentTitle,
+        finalScore: s.finalScore,
+      })),
+    });
 
     // 10. Token-Efficient Parent-Child Context Expansion (#7)
     let finalChunks: ContextChunkInput[] = keptScored.map((s) => s.candidate);
@@ -1022,10 +1180,14 @@ export class LightRagRetriever {
       effectiveMode,
       routingReason,
       intent,
+      facets: plan.features,
       strategy,
       configVersion: config.version,
       subQueries,
       crag,
+      ambiguity,
+      pprPaths,
+      historyInjectionsNeutralized,
       communitiesUsed,
       candidateFeatures,
       analysis,

@@ -23,6 +23,7 @@ export const documents = pgTable('documents', {
   expiresAt: timestamp('expires_at', { withTimezone: true }),
   supersedesDocumentId: uuid('supersedes_document_id'),
   authorityTier: smallint('authority_tier').default(2).notNull(),
+  governanceStatus: varchar('governance_status', { length: 24 }).default('active').notNull(),
   uploadedBy: uuid('uploaded_by').references(() => users.id),
   errorMessage: text('error_message'),
   notes: text('notes'),

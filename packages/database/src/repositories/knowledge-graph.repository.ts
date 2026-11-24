@@ -78,6 +78,8 @@ export class KnowledgeGraphRepository extends BaseRepository {
         description: e.description,
         sourceChunkIds: capUuidList(e.sourceChunkIds),
         documentIds: capUuidList(e.documentIds),
+        confidence: typeof e.confidence === 'number' ? Math.max(0.1, Math.min(1, e.confidence)) : 0.85,
+        normalizedAliases: e.normalizedAliases ?? [],
         embeddingModel,
         embedding: e.embedding ?? null,
         updatedAt: new Date(),
@@ -94,6 +96,8 @@ export class KnowledgeGraphRepository extends BaseRepository {
             description: sql`excluded.description`,
             sourceChunkIds: sql`excluded.source_chunk_ids`,
             documentIds: sql`excluded.document_ids`,
+            confidence: sql`GREATEST(${kgEntities.confidence}, excluded.confidence)`,
+            normalizedAliases: sql`excluded.normalized_aliases`,
             embeddingModel: sql`excluded.embedding_model`,
             embedding: sql`COALESCE(excluded.embedding, ${kgEntities.embedding})`,
             updatedAt: sql`now()`,
@@ -123,6 +127,9 @@ export class KnowledgeGraphRepository extends BaseRepository {
           keywords: r.keywords,
           description: r.description,
           weight: r.weight,
+          relationType: (r.relationType || 'related').slice(0, 32),
+          isDirected: Boolean(r.isDirected),
+          confidence: typeof r.confidence === 'number' ? Math.max(0.1, Math.min(1, r.confidence)) : 0.85,
           sourceChunkIds: capUuidList(r.sourceChunkIds),
           documentIds: capUuidList(r.documentIds),
           embeddingModel,
@@ -142,6 +149,9 @@ export class KnowledgeGraphRepository extends BaseRepository {
             keywords: sql`excluded.keywords`,
             description: sql`excluded.description`,
             weight: sql`excluded.weight`,
+            relationType: sql`CASE WHEN excluded.relation_type <> 'related' THEN excluded.relation_type ELSE ${kgRelations.relationType} END`,
+            isDirected: sql`excluded.is_directed OR ${kgRelations.isDirected}`,
+            confidence: sql`GREATEST(${kgRelations.confidence}, excluded.confidence)`,
             sourceChunkIds: sql`excluded.source_chunk_ids`,
             documentIds: sql`excluded.document_ids`,
             embeddingModel: sql`excluded.embedding_model`,
@@ -519,6 +529,49 @@ export class KnowledgeGraphRepository extends BaseRepository {
   }
 
   /**
+   * Reverse provenance lookup: fetches KG entities anchored in a set of high-confidence
+   * chunk IDs for Anchor-Guided Pseudo-Relevance Graph Bridging (PRGB).
+   * Strictly tenant-scoped and document-ACL filtered, ordered by specificity (rarest doc spread first).
+   */
+  async getEntitiesBySourceChunkIds(
+    orgId: string,
+    chunkIds: string[],
+    limit = 24,
+    documentIds?: string[],
+  ): Promise<RetrievedEntity[]> {
+    this.requireTenant(orgId);
+    const unique = [...new Set(chunkIds.filter(Boolean))];
+    if (unique.length === 0) return [];
+
+    const conditions = [
+      eq(kgEntities.orgId, orgId),
+      sql`${kgEntities.sourceChunkIds} && ${uuidArraySql(unique)}`,
+    ];
+    if (documentIds && documentIds.length > 0) {
+      conditions.push(sql`${kgEntities.documentIds} && ${uuidArraySql(documentIds)}`);
+    }
+
+    const docSpread = sql<number>`COALESCE(array_length(${kgEntities.documentIds}, 1), 1)`;
+    const rows = await this.db
+      .select({
+        id: kgEntities.id,
+        entityName: kgEntities.entityName,
+        canonicalName: kgEntities.canonicalName,
+        entityType: kgEntities.entityType,
+        description: kgEntities.description,
+        degree: kgEntities.degree,
+        sourceChunkIds: kgEntities.sourceChunkIds,
+        documentIds: kgEntities.documentIds,
+      })
+      .from(kgEntities)
+      .where(and(...conditions))
+      .orderBy(docSpread, kgEntities.degree)
+      .limit(limit);
+
+    return rows.map((r) => ({ ...r, similarity: 0.75 }));
+  }
+
+  /**
    * Resolves alias canonical names to their surviving canonical entity targets (#5 Entity Resolution).
    */
   async resolveEntityAliases(orgId: string, canonicalNames: string[]): Promise<Map<string, string>> {
@@ -648,6 +701,9 @@ export class KnowledgeGraphRepository extends BaseRepository {
           sourceCanonical: kgRelations.sourceCanonical,
           targetCanonical: kgRelations.targetCanonical,
           weight: kgRelations.weight,
+          relationType: kgRelations.relationType,
+          isDirected: kgRelations.isDirected,
+          confidence: kgRelations.confidence,
           sourceChunkIds: kgRelations.sourceChunkIds,
         })
         .from(kgRelations)
@@ -662,6 +718,9 @@ export class KnowledgeGraphRepository extends BaseRepository {
             sourceCanonical: r.sourceCanonical,
             targetCanonical: r.targetCanonical,
             weight: r.weight,
+            relationType: r.relationType,
+            isDirected: r.isDirected,
+            confidence: r.confidence,
             sourceChunkIds: r.sourceChunkIds,
           });
         }
@@ -768,6 +827,159 @@ export class KnowledgeGraphRepository extends BaseRepository {
         AND COALESCE(array_length(document_ids, 1), 0) = 0
     `);
 
+    // Clean up orphaned alias pointers and dangling relations referencing removed entities
+    await this.db.execute(sql`
+      DELETE FROM kg_entity_aliases a
+      WHERE a.org_id = ${orgId}::uuid
+        AND NOT EXISTS (
+          SELECT 1 FROM kg_entities e
+          WHERE e.org_id = a.org_id AND e.canonical_name = a.target_canonical
+        )
+    `);
+
+    await this.db.execute(sql`
+      DELETE FROM kg_relations r
+      WHERE r.org_id = ${orgId}::uuid
+        AND (
+          NOT EXISTS (SELECT 1 FROM kg_entities e WHERE e.org_id = r.org_id AND e.canonical_name = r.source_canonical)
+          OR NOT EXISTS (SELECT 1 FROM kg_entities e WHERE e.org_id = r.org_id AND e.canonical_name = r.target_canonical)
+        )
+    `);
+
+    await this.refreshEntityDegrees(orgId);
+  }
+
+  /**
+   * Automatic cosine-similarity synonymy edge discovery (HippoRAG-style) using pgvector:
+   * links semantically synonymous entities (`sim >= minSimilarity`, default 0.82) across
+   * documents so PPR bridges multilingual aliases and codenames without merging descriptions.
+   */
+  async upsertCosineSynonymyEdges(
+    orgId: string,
+    entities: MergedEntityInput[],
+    embeddingModel: string,
+    minSimilarity = 0.82,
+    maxPerEntity = 2,
+  ): Promise<number> {
+    this.requireTenant(orgId);
+    const synonymEdges: MergedRelationInput[] = [];
+    const seen = new Set<string>();
+
+    for (const e of entities) {
+      if (!e.embedding || e.embedding.length === 0) continue;
+      const neighbors = await this.searchEntities(orgId, e.embedding, maxPerEntity + 2, minSimilarity).catch(() => []);
+      let added = 0;
+      for (const n of neighbors) {
+        if (n.canonicalName === e.canonicalName) continue;
+        if (added >= maxPerEntity) break;
+        const [sC, tC, sN, tN] =
+          e.canonicalName < n.canonicalName
+            ? [e.canonicalName, n.canonicalName, e.entityName, n.entityName]
+            : [n.canonicalName, e.canonicalName, n.entityName, e.entityName];
+        const key = `${sC}::${tC}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        synonymEdges.push({
+          sourceEntity: sN,
+          targetEntity: tN,
+          sourceCanonical: sC,
+          targetCanonical: tC,
+          keywords: 'synonym, alias',
+          description: `Semantic synonymy edge (cosine=${n.similarity.toFixed(3)})`,
+          weight: Number((n.similarity * 0.85).toFixed(4)),
+          relationType: 'synonym',
+          isDirected: false,
+          confidence: Number(n.similarity.toFixed(4)),
+          sourceChunkIds: capUuidList([...e.sourceChunkIds, ...n.sourceChunkIds], 6),
+          documentIds: capUuidList([...e.documentIds, ...n.documentIds], 6),
+        });
+        added++;
+      }
+    }
+
+    if (synonymEdges.length > 0) {
+      await this.upsertRelations(orgId, synonymEdges, embeddingModel);
+    }
+    return synonymEdges.length;
+  }
+
+  /**
+   * Graph integrity audit: counts orphan entities, dangling relation endpoints, self-loops,
+   * and stale entity aliases for tenant health monitoring.
+   */
+  async checkGraphIntegrity(orgId: string): Promise<{
+    orphanEntities: number;
+    danglingRelations: number;
+    selfLoops: number;
+    staleAliases: number;
+    healthy: boolean;
+  }> {
+    this.requireTenant(orgId);
+    const [orphans, dangling, selfLoops, stale] = await Promise.all([
+      this.db.execute(sql`
+        SELECT count(*)::int AS cnt FROM kg_entities
+        WHERE org_id = ${orgId}::uuid AND COALESCE(array_length(document_ids, 1), 0) = 0
+      `),
+      this.db.execute(sql`
+        SELECT count(*)::int AS cnt FROM kg_relations r
+        WHERE r.org_id = ${orgId}::uuid AND (
+          NOT EXISTS (SELECT 1 FROM kg_entities e WHERE e.org_id = r.org_id AND e.canonical_name = r.source_canonical)
+          OR NOT EXISTS (SELECT 1 FROM kg_entities e WHERE e.org_id = r.org_id AND e.canonical_name = r.target_canonical)
+        )
+      `),
+      this.db.execute(sql`
+        SELECT count(*)::int AS cnt FROM kg_relations
+        WHERE org_id = ${orgId}::uuid AND source_canonical = target_canonical
+      `),
+      this.db.execute(sql`
+        SELECT count(*)::int AS cnt FROM kg_entity_aliases a
+        WHERE a.org_id = ${orgId}::uuid AND NOT EXISTS (
+          SELECT 1 FROM kg_entities e WHERE e.org_id = a.org_id AND e.canonical_name = a.target_canonical
+        )
+      `),
+    ]);
+
+    const readCnt = (res: unknown): number => {
+      const rows = Array.isArray(res) ? res : (res as { rows?: Array<{ cnt?: number }> })?.rows ?? [];
+      return Number((rows[0] as { cnt?: number } | undefined)?.cnt ?? 0);
+    };
+
+    const orphanEntities = readCnt(orphans);
+    const danglingRelations = readCnt(dangling);
+    const selfLoopCount = readCnt(selfLoops);
+    const staleAliases = readCnt(stale);
+
+    return {
+      orphanEntities,
+      danglingRelations,
+      selfLoops: selfLoopCount,
+      staleAliases,
+      healthy: orphanEntities === 0 && danglingRelations === 0 && selfLoopCount === 0 && staleAliases === 0,
+    };
+  }
+
+  /** Prunes orphan entities, dangling edges, self-loops, and stale aliases, then recomputes degrees. */
+  async pruneGraphOrphans(orgId: string): Promise<void> {
+    this.requireTenant(orgId);
+    await this.db.execute(sql`
+      DELETE FROM kg_relations WHERE org_id = ${orgId}::uuid AND source_canonical = target_canonical
+    `);
+    await this.db.execute(sql`
+      DELETE FROM kg_entities WHERE org_id = ${orgId}::uuid AND COALESCE(array_length(document_ids, 1), 0) = 0
+    `);
+    await this.db.execute(sql`
+      DELETE FROM kg_relations r
+      WHERE r.org_id = ${orgId}::uuid AND (
+        NOT EXISTS (SELECT 1 FROM kg_entities e WHERE e.org_id = r.org_id AND e.canonical_name = r.source_canonical)
+        OR NOT EXISTS (SELECT 1 FROM kg_entities e WHERE e.org_id = r.org_id AND e.canonical_name = r.target_canonical)
+      )
+    `);
+    await this.db.execute(sql`
+      DELETE FROM kg_entity_aliases a
+      WHERE a.org_id = ${orgId}::uuid AND NOT EXISTS (
+        SELECT 1 FROM kg_entities e WHERE e.org_id = a.org_id AND e.canonical_name = a.target_canonical
+      )
+    `);
     await this.refreshEntityDegrees(orgId);
   }
 
