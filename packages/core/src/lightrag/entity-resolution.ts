@@ -2,13 +2,44 @@ import { CONSTANTS } from '../constants.js';
 import type { ExtractedEntity, ExtractedRelation } from '../types/lightrag.js';
 import { mergeDescriptionFragments, mergeKeywords } from './parser.js';
 
-const CORPORATE_PREFIX_RE = /^(?:the|policy|standard|procedure|sop|document|doc|kebijakan|prosedur|dokumen)\s+/i;
-const EXACT_DOC_CODE_RE = /\b([A-Z]{2,6}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})?)\b/i;
+const CORPORATE_PREFIX_RE =
+  /^(?:the|policy|standard|procedure|sop|runbook|document|doc|system|platform|service|team|kebijakan|prosedur|dokumen|sistem|tim|panduan)\s+/i;
+const EXACT_DOC_CODE_RE = /\b([A-Z]{2,6}-[A-Z0-9]{1,8}(?:-[A-Z0-9]{1,8})*)\b/i;
+
+/**
+ * Extracts a canonical corporate identifier code if present (e.g. `POL-SEC-409`, `SOP-JKT-882`, `INC-2026-014`).
+ * Requires at least one digit so ordinary hyphenated words (`Zero-Trust`, `Cold-Chain`, `Multi-Tenant`)
+ * are never mistaken for distinct corporate codes.
+ */
+export function extractEntityCode(name: string): string | null {
+  for (const match of name.matchAll(new RegExp(EXACT_DOC_CODE_RE.source, 'gi'))) {
+    const candidate = match[1];
+    if (candidate && /\d/.test(candidate)) {
+      return candidate.toLowerCase();
+    }
+  }
+  return null;
+}
+
+const ABBREVIATION_EXPANSIONS: Record<string, string> = {
+  sec: 'security',
+  ops: 'operations',
+  infra: 'infrastructure',
+  auth: 'authentication',
+  mgmt: 'management',
+  eng: 'engineering',
+  fin: 'finance',
+  hr: 'human resources',
+  jkt: 'jakarta',
+  sby: 'surabaya',
+  mks: 'makassar',
+  bpn: 'balikpapan',
+};
 
 /**
  * Produces a normalized alias key for corporate entity resolution.
- * Collapses casing, punctuation, extra spaces, and common wrapper words
- * (e.g., `"Policy POL-SEC-409"` -> `"pol-sec-409"`, `"Security Policy (POL-SEC-409)"`).
+ * Collapses casing, punctuation, extra spaces, common Indonesian/English wrapper words,
+ * and standard corporate abbreviations (e.g., `"Policy POL-SEC-409"` -> `"pol-sec-409"`).
  */
 export function normalizeEntityAliasKey(name: string): string {
   const cleaned = name
@@ -17,15 +48,163 @@ export function normalizeEntityAliasKey(name: string): string {
     .replace(/['"`()[\]{}]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return cleaned.replace(CORPORATE_PREFIX_RE, '').trim() || cleaned;
+  const stripped = cleaned.replace(CORPORATE_PREFIX_RE, '').trim() || cleaned;
+  // Preserve exact hyphenated codes (containing digits) untouched; expand standalone abbreviations in prose names
+  if (extractEntityCode(stripped)) return stripped;
+  return stripped
+    .split(' ')
+    .map((tok) => ABBREVIATION_EXPANSIONS[tok] ?? tok)
+    .join(' ');
+}
+
+export function cosineSimilarityVectors(a: number[], b: number[]): number {
+  const len = Math.min(a.length, b.length);
+  if (len === 0) return 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < len; i++) {
+    const va = a[i] ?? 0;
+    const vb = b[i] ?? 0;
+    dot += va * vb;
+    na += va * va;
+    nb += vb * vb;
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  return denom > 0 ? dot / denom : 0;
 }
 
 /**
- * Extracts a canonical corporate identifier code if present (e.g. `POL-SEC-409`, `SOP-JKT-882`, `INC-2026-014`).
+ * Context-embedding entity disambiguation guard: prevents homonyms (same/similar surface
+ * name with incompatible types or divergent contextual embeddings) from falsely merging.
  */
-export function extractEntityCode(name: string): string | null {
-  const match = name.match(EXACT_DOC_CODE_RE);
-  return match?.[1] ? match[1].toLowerCase() : null;
+export function shouldMergeEntitiesWithContext(params: {
+  nameA: string;
+  typeA: string;
+  embeddingA?: number[] | null;
+  nameB: string;
+  typeB: string;
+  embeddingB?: number[] | null;
+  minContextCosine?: number;
+}): boolean {
+  if (!areEntityTypesCompatible(params.typeA, params.typeB)) return false;
+  const codeA = extractEntityCode(params.nameA);
+  const codeB = extractEntityCode(params.nameB);
+  if (codeA && codeB && codeA !== codeB) return false;
+  if (params.embeddingA && params.embeddingB && params.embeddingA.length > 0 && params.embeddingB.length > 0) {
+    const cos = cosineSimilarityVectors(params.embeddingA, params.embeddingB);
+    return cos >= (params.minContextCosine ?? 0.78);
+  }
+  return true;
+}
+
+export interface ClassifiedRelationMeta {
+  relationType: 'supersedes' | 'governs' | 'owns' | 'depends_on' | 'reports_to' | 'synonym' | 'related';
+  isDirected: boolean;
+}
+
+/**
+ * Deterministic relation-type and directionality classifier (<0.1ms, zero LLM cost).
+ */
+export function classifyRelationType(keywords: string, description: string): ClassifiedRelationMeta {
+  const text = `${keywords} ${description}`.toLowerCase();
+  if (/\b(?:supersedes|replaces|obsoletes|menggantikan)\b/.test(text)) {
+    return { relationType: 'supersedes', isDirected: true };
+  }
+  if (/\b(?:governs|mandates|requires|enforces|regulates|mengatur|mewajibkan)\b/.test(text)) {
+    return { relationType: 'governs', isDirected: true };
+  }
+  if (/\b(?:owns|manages|leads|chairs|operates|maintains|mengelola|memimpin)\b/.test(text)) {
+    return { relationType: 'owns', isDirected: true };
+  }
+  if (/\b(?:reports\s+to|escalates\s+to|melapor\s+kepada)\b/.test(text)) {
+    return { relationType: 'reports_to', isDirected: true };
+  }
+  if (/\b(?:depends\s+on|uses|integrates\s+with|routes\s+to|menggunakan|bergantung)\b/.test(text)) {
+    return { relationType: 'depends_on', isDirected: true };
+  }
+  if (/\b(?:synonym|alias|also\s+known\s+as|aka|dikenal\s+sebagai)\b/.test(text)) {
+    return { relationType: 'synonym', isDirected: false };
+  }
+  return { relationType: 'related', isDirected: false };
+}
+
+export interface SynonymyEntityNode {
+  canonicalName: string;
+  entityName: string;
+  entityType: string;
+  embedding: number[];
+  sourceChunkIds: string[];
+  documentIds: string[];
+}
+
+export interface SynonymyEdgeCandidate {
+  sourceCanonical: string;
+  targetCanonical: string;
+  sourceEntity: string;
+  targetEntity: string;
+  similarity: number;
+  weight: number;
+  sourceChunkIds: string[];
+  documentIds: string[];
+}
+
+/**
+ * Discovers automatic cosine-similarity synonymy edges (HippoRAG-style) across entities
+ * with compatible types and high semantic similarity (`>= threshold`, default `0.82`),
+ * while strictly refusing to bridge two DIFFERENT explicit corporate codes.
+ */
+export function buildCosineSynonymyEdges(
+  entities: SynonymyEntityNode[],
+  options: { minSimilarity?: number; maxEdgesPerNode?: number } = {},
+): SynonymyEdgeCandidate[] {
+  const minSim = options.minSimilarity ?? 0.82;
+  const maxPerNode = options.maxEdgesPerNode ?? 2;
+  const out: SynonymyEdgeCandidate[] = [];
+  const seenPairs = new Set<string>();
+
+  for (let i = 0; i < entities.length; i++) {
+    const a = entities[i]!;
+    if (!a.embedding || a.embedding.length === 0) continue;
+    const codeA = extractEntityCode(a.entityName);
+    const matches: Array<{ target: SynonymyEntityNode; sim: number }> = [];
+
+    for (let j = 0; j < entities.length; j++) {
+      if (i === j) continue;
+      const b = entities[j]!;
+      if (!b.embedding || b.embedding.length === 0) continue;
+      if (a.canonicalName === b.canonicalName) continue;
+      if (!areEntityTypesCompatible(a.entityType, b.entityType)) continue;
+      const codeB = extractEntityCode(b.entityName);
+      if (codeA && codeB && codeA !== codeB) continue;
+
+      const sim = cosineSimilarityVectors(a.embedding, b.embedding);
+      if (sim >= minSim) {
+        matches.push({ target: b, sim });
+      }
+    }
+
+    matches.sort((x, y) => y.sim - x.sim);
+    for (const m of matches.slice(0, maxPerNode)) {
+      const [s, t] =
+        a.canonicalName < m.target.canonicalName ? [a, m.target] : [m.target, a];
+      const key = `${s.canonicalName}::${t.canonicalName}`;
+      if (seenPairs.has(key)) continue;
+      seenPairs.add(key);
+      out.push({
+        sourceCanonical: s.canonicalName,
+        targetCanonical: t.canonicalName,
+        sourceEntity: s.entityName,
+        targetEntity: t.entityName,
+        similarity: m.sim,
+        weight: Number((m.sim * 0.85).toFixed(4)),
+        sourceChunkIds: [...new Set([...s.sourceChunkIds, ...t.sourceChunkIds])].slice(0, 6),
+        documentIds: [...new Set([...s.documentIds, ...t.documentIds])].slice(0, 6),
+      });
+    }
+  }
+
+  return out;
 }
 
 /**

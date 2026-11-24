@@ -3,34 +3,52 @@ export interface TemporalQueryIntent {
   preferLatest: boolean;
   /** User explicitly asks about historical / superseded / older versions. */
   allowHistorical: boolean;
-  /** Specific year mentioned in query (e.g. 2024, 2025, 2026), if any. */
+  /** Specific target year requested in query (e.g. 2024), if any. */
   targetYear: number | null;
+  /** Explicit upper-bound exclusion year (e.g. "before the 2026 update" -> 2026), if any. */
+  beforeYear: number | null;
 }
 
 const LATEST_CUE_RE =
   /\b(?:latest|current|currently|active|effective|now|today|newest|updated|recent|terbaru|berlaku|saat\s+ini|terkini|sekarang)\b/i;
 const HISTORICAL_CUE_RE =
-  /\b(?:previous|prior|old|older|former|historical|history|superseded|deprecated|archived|legacy|before\s+20\d\d|sebelumnya|lama|terdahulu|riwayat)\b/i;
+  /\b(?:previous|prior|old|older|former|historical|history|superseded|deprecated|archived|legacy|before\s+(?:the\s+)?20\d\d|prior\s+to\s+(?:the\s+)?20\d\d|sebelum(?:nya)?\s+(?:tahun\s+)?20\d\d|sebelumnya|lama|terdahulu|riwayat)\b/i;
+const BEFORE_YEAR_RE = /\b(?:before|prior\s+to|sebelum)\s+(?:the\s+|tahun\s+)?(20[1-3]\d)\b/i;
 const YEAR_RE = /\b(20[1-3]\d)\b/g;
 
 /**
  * Extracts temporal intent from English & Indonesian enterprise queries in <0.5ms.
+ * Properly distinguishes historical point-in-time queries ("previous 2024 ... before the 2026 update")
+ * from current-version queries.
  */
 export function parseTemporalIntent(query: string): TemporalQueryIntent {
   const preferLatest = LATEST_CUE_RE.test(query);
   const allowHistorical = HISTORICAL_CUE_RE.test(query);
+
+  const beforeMatch = query.match(BEFORE_YEAR_RE);
+  const beforeYear = beforeMatch ? Number(beforeMatch[1]) : null;
 
   const years: number[] = [];
   for (const m of query.matchAll(YEAR_RE)) {
     const y = Number(m[1]);
     if (Number.isFinite(y)) years.push(y);
   }
-  const targetYear = years.length > 0 ? Math.max(...years) : null;
+
+  let targetYear: number | null = null;
+  if (years.length > 0) {
+    if (allowHistorical) {
+      const nonUpperBound = beforeYear !== null ? years.filter((y) => y !== beforeYear) : years;
+      targetYear = nonUpperBound.length > 0 ? Math.min(...nonUpperBound) : null;
+    } else {
+      targetYear = Math.max(...years);
+    }
+  }
 
   return {
-    preferLatest: preferLatest || (!allowHistorical && targetYear === null),
+    preferLatest: !allowHistorical && (preferLatest || targetYear === null),
     allowHistorical,
     targetYear,
+    beforeYear,
   };
 }
 
@@ -74,25 +92,46 @@ export function authorityTierLabel(tier: number): string {
   }
 }
 
+export type DocumentGovernanceStatus = 'draft' | 'approved' | 'active' | 'superseded' | 'archived';
+
 export interface TemporalCandidate {
   documentId: string;
   documentTitle: string;
   effectiveAt?: Date | string | null;
   expiresAt?: Date | string | null;
+  /** Optional aliases for effectiveAt / expiresAt (`effective_from` / `effective_until`). */
+  effectiveFrom?: Date | string | null;
+  effectiveUntil?: Date | string | null;
   supersedesDocumentId?: string | null;
   authorityTier?: number | null;
+  governanceStatus?: DocumentGovernanceStatus | string | null;
   createdAt?: Date | string | null;
   updatedAt?: Date | string | null;
+}
+
+/**
+ * Point-in-time validity check: returns true if the document's `[effectiveFrom, effectiveUntil)`
+ * window covers `asOfDate`. Documents without explicit bounds are treated as open-ended.
+ */
+export function isDocumentEffectiveAsOf(doc: TemporalCandidate, asOfDate: Date): boolean {
+  const targetMs = asOfDate.getTime();
+  const startMs = toTimestamp(doc.effectiveAt ?? doc.effectiveFrom);
+  const endMs = toTimestamp(doc.expiresAt ?? doc.effectiveUntil);
+  if (startMs !== null && targetMs < startMs) return false;
+  if (endMs !== null && targetMs >= endMs) return false;
+  return true;
 }
 
 export interface TemporalResolutionAnnotation {
   isSuperseded: boolean;
   supersededByDocId?: string;
   isExpired: boolean;
-  /** Normalized recency score in [0, 1]. */
+  /** Normalized recency/temporal-fit score in [0, 1]. */
   recencyScore: number;
   /** Normalized authority score in [0, 1]. */
   authorityScore: number;
+  /** Version-alignment feature in [0, 1]: prefers active versions normally, or target historical versions when requested. */
+  versionMatchScore: number;
   /** Multiplier applied when temporal conflict resolution adjusts score. */
   temporalMultiplier: number;
   /** Compact metadata badge injected into prompt context for conflict clarity. */
@@ -138,37 +177,77 @@ export function resolveTemporalAndAuthorityConflicts<T extends TemporalCandidate
     if (seenDocs.has(c.documentId)) continue;
     seenDocs.add(c.documentId);
 
-    const effMs = toTimestamp(c.effectiveAt) ?? toTimestamp(c.updatedAt) ?? toTimestamp(c.createdAt);
-    const expMs = toTimestamp(c.expiresAt);
+    const effMs =
+      toTimestamp(c.effectiveAt ?? c.effectiveFrom) ??
+      toTimestamp(c.updatedAt) ??
+      toTimestamp(c.createdAt);
+    const expMs = toTimestamp(c.expiresAt ?? c.effectiveUntil);
+    const govStatus = (c.governanceStatus ?? 'active').toLowerCase();
     const isExpired = expMs !== null && expMs < nowMs;
-    const isSuperseded = supersededBy.has(c.documentId);
+    const isSuperseded = supersededBy.has(c.documentId) || govStatus === 'superseded';
+    const isDraft = govStatus === 'draft';
+    const isArchived = govStatus === 'archived';
     const tier = c.authorityTier ?? inferAuthorityTier(c.documentTitle);
     const authorityScore = Math.max(0.25, Math.min(1, tier / 4));
 
     // Exponential recency decay: 1.0 for today, ~0.5 after 365 days, floors at 0.2
     let recencyScore = 0.7;
+    const docYear = effMs !== null ? new Date(effMs).getUTCFullYear() : null;
     if (effMs !== null) {
       const ageDays = Math.max(0, (nowMs - effMs) / 86_400_000);
       recencyScore = Math.max(0.2, Math.exp(-Math.LN2 * (ageDays / 365)));
     }
 
-    // Specific year match boost/penalty
+    // Specific year & historical point-in-time alignment
     let yearMultiplier = 1.0;
-    if (intent.targetYear !== null && effMs !== null) {
-      const docYear = new Date(effMs).getUTCFullYear();
+    let versionMatchScore = isSuperseded ? 0.0 : isExpired ? 0.3 : 1.0;
+
+    if (intent.allowHistorical) {
+      if (intent.targetYear !== null && docYear !== null) {
+        if (docYear === intent.targetYear) {
+          yearMultiplier = 1.25;
+          versionMatchScore = 1.0;
+          recencyScore = 0.9;
+        } else if (intent.beforeYear !== null && docYear >= intent.beforeYear) {
+          yearMultiplier = 0.72;
+          versionMatchScore = 0.2;
+          recencyScore = 0.2;
+        } else {
+          versionMatchScore = isSuperseded ? 0.85 : 0.65;
+        }
+      } else if (intent.beforeYear !== null && docYear !== null) {
+        if (docYear < intent.beforeYear) {
+          yearMultiplier = 1.18;
+          versionMatchScore = 1.0;
+          recencyScore = 0.85;
+        } else {
+          yearMultiplier = 0.72;
+          versionMatchScore = 0.2;
+          recencyScore = 0.2;
+        }
+      } else {
+        versionMatchScore = isSuperseded ? 0.9 : 0.75;
+      }
+    } else if (intent.targetYear !== null && docYear !== null) {
       if (docYear === intent.targetYear) {
         yearMultiplier = 1.15;
-      } else if (Math.abs(docYear - intent.targetYear) >= 2 && !intent.allowHistorical) {
+      } else if (Math.abs(docYear - intent.targetYear) >= 2) {
         yearMultiplier = 0.85;
       }
     }
 
     let temporalMultiplier = yearMultiplier;
-    if (!intent.allowHistorical) {
+    if (isDraft) {
+      // Unapproved drafts are strongly demoted unless explicitly allowed
+      temporalMultiplier *= 0.25;
+      versionMatchScore = Math.min(versionMatchScore, 0.15);
+    } else if (!intent.allowHistorical) {
       if (isSuperseded) {
         // Keep a small floor if user explicitly asked for that doc's year; otherwise strongly demote
-        const docYear = effMs !== null ? new Date(effMs).getUTCFullYear() : null;
         temporalMultiplier *= intent.targetYear !== null && docYear === intent.targetYear ? 0.9 : 0.35;
+      } else if (isArchived) {
+        temporalMultiplier *= 0.3;
+        versionMatchScore = Math.min(versionMatchScore, 0.2);
       } else if (isExpired) {
         temporalMultiplier *= 0.55;
       }
@@ -176,11 +255,13 @@ export function resolveTemporalAndAuthorityConflicts<T extends TemporalCandidate
 
     const badgeParts: string[] = [];
     if (tier >= 3 || tier === 1) badgeParts.push(authorityTierLabel(tier));
-    if (c.effectiveAt) {
+    if (c.effectiveAt || c.effectiveFrom) {
       const effDate = new Date(effMs!).toISOString().slice(0, 10);
       badgeParts.push(`Effective ${effDate}`);
     }
-    if (isSuperseded) badgeParts.push('SUPERSEDED');
+    if (isDraft) badgeParts.push('DRAFT');
+    else if (isSuperseded) badgeParts.push('SUPERSEDED');
+    else if (isArchived) badgeParts.push('ARCHIVED');
     else if (isExpired) badgeParts.push('EXPIRED');
 
     out.set(c.documentId, {
@@ -189,6 +270,7 @@ export function resolveTemporalAndAuthorityConflicts<T extends TemporalCandidate
       isExpired,
       recencyScore,
       authorityScore,
+      versionMatchScore,
       temporalMultiplier,
       badge: badgeParts.length > 0 ? badgeParts.join(' | ') : undefined,
     });

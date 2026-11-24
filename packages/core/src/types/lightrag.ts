@@ -41,6 +41,8 @@ export interface MergedEntityInput {
   description: string;
   sourceChunkIds: string[];
   documentIds: string[];
+  confidence?: number;
+  normalizedAliases?: string[];
   embedding?: number[];
 }
 
@@ -52,6 +54,9 @@ export interface MergedRelationInput {
   keywords: string;
   description: string;
   weight: number;
+  relationType?: string;
+  isDirected?: boolean;
+  confidence?: number;
   sourceChunkIds: string[];
   documentIds: string[];
   embedding?: number[];
@@ -116,6 +121,7 @@ export interface ContextChunkInput {
   expiresAt?: Date | string | null;
   supersedesDocumentId?: string | null;
   authorityTier?: number | null;
+  governanceStatus?: string | null;
   temporalBadge?: string;
   similarity: number;
   source?: 'vector' | 'fts' | 'entity' | 'relation' | 'ppr' | 'community' | 'maxsim' | 'hybrid';

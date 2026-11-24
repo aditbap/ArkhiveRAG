@@ -72,4 +72,8 @@ CI (`.github/workflows/ci.yml`) typechecks, lints, tests, builds, and scans Dock
 pnpm typecheck && pnpm lint && pnpm test:unit && pnpm build
 ```
 
+## Benchmarks
+
+See **[BENCHMARK.md](BENCHMARK.md)** for the full 5-way head-to-head benchmark against `LlamaIndex`, `LightRAG`, `Haystack`, and `HippoRAG 2`, plus live 10,000-document PostgreSQL scalability, security red-team, and token cost results.
+
 Security policy: [SECURITY.md](SECURITY.md). License: [LICENSE](LICENSE).
