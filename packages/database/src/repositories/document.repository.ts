@@ -141,6 +141,75 @@ export class DocumentRepository extends BaseRepository {
   }
 
   /**
+   * Updates enterprise document governance lifecycle (`draft | approved | active | superseded | archived`),
+   * effective validity dates, and authority tier, appends an immutable audit trail entry in `metadata`,
+   * and atomically marks any `supersedesDocumentId` predecessor as `superseded` when activated.
+   */
+  async updateGovernance(
+    tenantId: string,
+    id: string,
+    patch: {
+      governanceStatus: string;
+      effectiveAt?: Date | null;
+      expiresAt?: Date | null;
+      supersedesDocumentId?: string | null;
+      authorityTier?: number;
+      actorUserId: string;
+      previousStatus: string;
+      existingMetadata?: Record<string, unknown>;
+      note?: string;
+    },
+  ) {
+    this.requireTenant(tenantId);
+    const priorHistory = Array.isArray(patch.existingMetadata?.governanceHistory)
+      ? (patch.existingMetadata?.governanceHistory as unknown[])
+      : [];
+    const auditEntry = {
+      from: patch.previousStatus,
+      to: patch.governanceStatus,
+      actorUserId: patch.actorUserId,
+      at: new Date().toISOString(),
+      ...(patch.note ? { note: patch.note } : {}),
+    };
+    const nextMetadata = {
+      ...(patch.existingMetadata ?? {}),
+      governanceHistory: [...priorHistory.slice(-19), auditEntry],
+    };
+
+    const setValues: Record<string, unknown> = {
+      governanceStatus: patch.governanceStatus,
+      metadata: nextMetadata,
+      updatedAt: new Date(),
+    };
+    if (patch.effectiveAt !== undefined) setValues.effectiveAt = patch.effectiveAt;
+    if (patch.expiresAt !== undefined) setValues.expiresAt = patch.expiresAt;
+    if (patch.supersedesDocumentId !== undefined) setValues.supersedesDocumentId = patch.supersedesDocumentId;
+    if (patch.authorityTier !== undefined) setValues.authorityTier = patch.authorityTier;
+
+    const [updated] = await this.db
+      .update(documents)
+      .set(setValues)
+      .where(and(eq(documents.id, id), eq(documents.orgId, tenantId), eq(documents.isDeleted, false)))
+      .returning();
+
+    // Automatically mark predecessor superseded when activating a replacement edition
+    if (updated && patch.governanceStatus === 'active' && patch.supersedesDocumentId && patch.supersedesDocumentId !== id) {
+      await this.db
+        .update(documents)
+        .set({ governanceStatus: 'superseded', updatedAt: new Date() })
+        .where(
+          and(
+            eq(documents.id, patch.supersedesDocumentId),
+            eq(documents.orgId, tenantId),
+            eq(documents.isDeleted, false),
+          ),
+        );
+    }
+
+    return updated;
+  }
+
+  /**
    * Atomically deactivates the current active version (if any) and inserts a
    * new one, with the version number incremented from whatever came before.
    * Used both for the initial upload (no prior version — number starts at 1)

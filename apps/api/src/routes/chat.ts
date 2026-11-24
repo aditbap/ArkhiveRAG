@@ -24,9 +24,12 @@ import {
   CONSTANTS,
   CRAG_LOW_CONFIDENCE_DIRECTIVE,
   buildLightRagSystemPrompt,
+  buildVersionedChatCacheKey,
+  calibrateAnswerConfidence,
   compressConversationHistory,
   isRagQueryMode,
   sanitizeConversationHistory,
+  validateAnswerCitations,
   type EmbeddingProvider,
   type RagQueryMode,
   type RerankerProvider,
@@ -238,10 +241,11 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         input: userQuery,
       });
 
-      // Cache key includes org version, document scope, RAG mode, AND recent turn context
-      // (prevents follow-up messages like "Why?" from hitting unrelated conversations' cache!)
-      const docIdsStr =
-        Array.isArray(documentIds) && documentIds.length ? [...documentIds].sort().join(',') : 'all';
+      // Version-aware & ACL-version-aware cache key (immediately invalidates on doc updates,
+      // governance transitions, AND member role changes / permission revocations).
+      const includeDrafts =
+        (body as { includeDrafts?: boolean }).includeDrafts === true &&
+        (request.userRole === 'owner' || request.userRole === 'admin');
       const historyFingerprint =
         priorHistory.length > 0
           ? priorHistory
@@ -255,12 +259,26 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         .digest('hex');
 
       let cacheVersion = '0';
+      let aclVersion = '0';
       try {
-        cacheVersion = (await redisConnection.get(`rag:cache-version:${orgId}`)) ?? '0';
+        const [dv, av] = await Promise.all([
+          redisConnection.get(`rag:cache-version:${orgId}`),
+          redisConnection.get(`rag:acl-version:${orgId}`),
+        ]);
+        cacheVersion = dv ?? '0';
+        aclVersion = av ?? '0';
       } catch {
         /* cache is best-effort */
       }
-      const cacheKey = `cache:chat:org:${orgId}:v${cacheVersion}:mode:${ragMode}:docs:${docIdsStr}:query:${queryHash}`;
+      const cacheKey = buildVersionedChatCacheKey({
+        orgId,
+        docCacheVersion: cacheVersion,
+        aclVersion,
+        includeDrafts,
+        ragMode,
+        documentIds,
+        queryHash,
+      });
 
       try {
         const cachedResult = await redisConnection.get(cacheKey);
@@ -361,6 +379,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         history: priorHistory,
         mode: ragMode,
         documentIds,
+        includeDrafts,
         rerankLimit: RERANK_LIMIT,
         rerankMinScore: RERANK_MIN_SCORE,
         retrievalConfig: activeConfig.config,
@@ -389,6 +408,11 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
           confidence: Number(retrieval.crag.confidence.toFixed(3)),
         },
         ambiguity: retrieval.ambiguity,
+        contradictions: {
+          hasContradictions: retrieval.contradictions.hasContradictions,
+          count: retrieval.contradictions.contradictions.length,
+        },
+        multiHopCoverage: retrieval.multiHopCoverage,
         facets: {
           isMultilingual: retrieval.facets.isMultilingual,
           isHistorical: retrieval.facets.allowHistorical,
@@ -442,6 +466,12 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
       const promptAddenda: string[] = [];
       if (retrieval.crag.action === 'abstain_hint') {
         promptAddenda.push(CRAG_LOW_CONFIDENCE_DIRECTIVE);
+      }
+      if (retrieval.contradictions.hasContradictions && retrieval.contradictions.promptDirective) {
+        promptAddenda.push(retrieval.contradictions.promptDirective);
+      }
+      if (retrieval.multiHopCoverage.missingHopHint) {
+        promptAddenda.push(`MULTI-HOP CHECK: ${retrieval.multiHopCoverage.missingHopHint}`);
       }
       if (retrieval.ambiguity.isAmbiguous && retrieval.ambiguity.clarificationHint) {
         promptAddenda.push(`AMBIGUITY GUIDANCE: ${retrieval.ambiguity.clarificationHint}`);
@@ -502,6 +532,16 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
             content: userQuery,
           });
 
+          const citationValidation = validateAnswerCitations(fullContent, assembled.chunksUsed);
+          const calibratedConfidence = calibrateAnswerConfidence({
+            cragConfidence: retrieval.crag.confidence,
+            cragAction: retrieval.crag.action,
+            contradictionCount: retrieval.contradictions.contradictions.length,
+            multiHopSufficient: retrieval.multiHopCoverage.sufficient,
+            citationGroundingRatio: citationValidation.groundingRatio,
+            forgedCitationCount: citationValidation.forgedCitations.length,
+          });
+
           await db.insert(messages).values({
             id: assistantMessageId,
             conversationId,
@@ -511,7 +551,18 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
             model: queryLlm.model,
             tokenCount: usage?.total_tokens || 0,
             latencyMs,
-            metadata: { retrieval: retrievalMeta },
+            metadata: {
+              retrieval: retrievalMeta,
+              answerReliability: {
+                citationValidation: {
+                  valid: citationValidation.valid,
+                  groundingRatio: citationValidation.groundingRatio,
+                  forgedCitations: citationValidation.forgedCitations,
+                  unsupportedClaimCount: citationValidation.unsupportedClaims.length,
+                },
+                calibratedConfidence,
+              },
+            },
           });
 
           // Non-blocking compact telemetry for RetrievalLearningEngine

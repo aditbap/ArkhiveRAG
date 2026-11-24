@@ -94,6 +94,80 @@ export function authorityTierLabel(tier: number): string {
 
 export type DocumentGovernanceStatus = 'draft' | 'approved' | 'active' | 'superseded' | 'archived';
 
+export const VALID_GOVERNANCE_STATUSES: readonly DocumentGovernanceStatus[] = [
+  'draft',
+  'approved',
+  'active',
+  'superseded',
+  'archived',
+] as const;
+
+export function isDocumentGovernanceStatus(v: unknown): v is DocumentGovernanceStatus {
+  return typeof v === 'string' && (VALID_GOVERNANCE_STATUSES as readonly string[]).includes(v);
+}
+
+const ALLOWED_GOVERNANCE_TRANSITIONS: Record<DocumentGovernanceStatus, DocumentGovernanceStatus[]> = {
+  draft: ['approved', 'active', 'archived'],
+  approved: ['active', 'draft', 'archived'],
+  active: ['superseded', 'archived'],
+  superseded: ['archived', 'active'],
+  archived: ['draft'],
+};
+
+/**
+ * Validates enterprise document approval workflow transitions with RBAC enforcement:
+ * - Only `owner` or `admin` may approve, activate, supersede, or archive documents.
+ * - Enforces legal lifecycle state transitions (e.g. `draft -> approved -> active -> superseded -> archived`).
+ */
+export function validateGovernanceTransition(
+  fromStatus: DocumentGovernanceStatus,
+  toStatus: DocumentGovernanceStatus,
+  actorRole: string,
+): { allowed: boolean; reason?: string } {
+  if (fromStatus === toStatus) {
+    return { allowed: true };
+  }
+  const role = actorRole.toLowerCase();
+  if (role !== 'owner' && role !== 'admin') {
+    return {
+      allowed: false,
+      reason: `Role "${actorRole}" cannot transition governance status to "${toStatus}" (owner/admin required)`,
+    };
+  }
+  const allowedTargets = ALLOWED_GOVERNANCE_TRANSITIONS[fromStatus] ?? [];
+  if (!allowedTargets.includes(toStatus)) {
+    return {
+      allowed: false,
+      reason: `Illegal governance transition "${fromStatus}" -> "${toStatus}" (allowed: ${allowedTargets.join(', ')})`,
+    };
+  }
+  return { allowed: true };
+}
+
+/**
+ * Builds a version-aware, ACL-version-aware, role-visibility-scoped chat cache key.
+ * Prevents stale answers from leaking after document edits, governance changes, or
+ * library member permission revocations/role downgrades.
+ */
+export function buildVersionedChatCacheKey(params: {
+  orgId: string;
+  docCacheVersion: string;
+  aclVersion: string;
+  includeDrafts: boolean;
+  ragMode: string;
+  documentIds?: string[];
+  asOfDate?: Date | null;
+  queryHash: string;
+}): string {
+  const docScope =
+    Array.isArray(params.documentIds) && params.documentIds.length > 0
+      ? [...params.documentIds].sort().join(',')
+      : 'all';
+  const draftFlag = params.includeDrafts ? 'd1' : 'd0';
+  const asOfFlag = params.asOfDate ? params.asOfDate.toISOString().slice(0, 10) : 'now';
+  return `cache:chat:org:${params.orgId}:dv${params.docCacheVersion}:av${params.aclVersion}:${draftFlag}:asof_${asOfFlag}:mode:${params.ragMode}:docs:${docScope}:q:${params.queryHash}`;
+}
+
 export interface TemporalCandidate {
   documentId: string;
   documentTitle: string;
