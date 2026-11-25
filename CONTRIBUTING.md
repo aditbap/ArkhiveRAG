@@ -15,7 +15,7 @@ pnpm db:migrate && pnpm dev
 
 ## Before Opening a PR
 
-`pnpm typecheck && pnpm lint && pnpm test:unit && pnpm build` must pass (CI runs the same checks and builds Docker images).
+`pnpm typecheck && pnpm lint && pnpm test:unit && pnpm build` must pass (CI runs the same checks on every PR and push to main).
 
 If your change touches database schemas, SQL queries, caching, or concurrency:
 - Ensure Postgres is running (`docker compose -f infra/docker/docker-compose.yml up -d postgres`).

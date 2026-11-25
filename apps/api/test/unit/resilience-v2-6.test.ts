@@ -87,6 +87,11 @@ describe('V2.6 Phase 2 — Crash-Safe Idempotent Ingestion & Storage Guards', ()
 
 describe('V2.6 Phase 3 — Distributed Tracing, Correlation Headers & Production Metrics', () => {
   it('propagates X-Request-Id, generates valid W3C traceparent, and exposes resilience metrics', async () => {
+    process.env.MINIO_ENDPOINT ||= 'localhost';
+    process.env.MINIO_ACCESS_KEY ||= 'test-access-key';
+    process.env.MINIO_SECRET_KEY ||= 'test-secret-key';
+    process.env.MINIO_BUCKET ||= 'test-documents';
+
     const { buildServer } = await import('../../src/server.js');
     const server = buildServer();
     try {
