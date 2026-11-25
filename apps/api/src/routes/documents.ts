@@ -176,8 +176,14 @@ export const documentRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       objectInfo = await storage.upload(objectKey, hashed, data.mimetype);
     } catch (err) {
-      request.log.error(err, 'Failed to upload file to storage');
-      return reply.status(500).send({ error: { code: 'INTERNAL_ERROR', message: 'Failed to process file' } });
+      request.log.error(err, 'Failed to upload file to object storage');
+      return reply.status(503).send({
+        error: {
+          code: 'STORAGE_UNAVAILABLE',
+          message: 'Object storage is temporarily unavailable. Please retry shortly.',
+          requestId: request.id,
+        },
+      });
     }
 
     // @fastify/multipart cuts the stream at the size limit and only flags it; without this check a
@@ -210,30 +216,43 @@ export const documentRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    // Create Document record in DB
-    const doc = await docRepo.create(orgId, {
-      orgId,
-      title: data.filename,
-      fileName: data.filename,
-      fileType,
-      fileSizeBytes,
-      fileHash,
-      status: 'uploaded',
-      folderId: folderId ?? null,
-      uploadedBy: request.user?.id,
-      metadata: {},
-    });
-
-    if (!doc) {
-      return reply.status(500).send({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create document record' } });
+    let doc;
+    let versionId: string;
+    try {
+      doc = await docRepo.create(orgId, {
+        orgId,
+        title: data.filename,
+        fileName: data.filename,
+        fileType,
+        fileSizeBytes,
+        fileHash,
+        status: 'uploaded',
+        folderId: folderId ?? null,
+        uploadedBy: request.user?.id,
+        metadata: {},
+      });
+      if (!doc) {
+        await storage.delete(objectKey).catch(() => undefined);
+        return reply.status(500).send({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create document record', requestId: request.id } });
+      }
+      const version = await docRepo.createNewVersion(orgId, doc.id, {
+        filePath: objectKey,
+        fileHash,
+        fileSizeBytes,
+      });
+      versionId = version.id;
+    } catch (err) {
+      // Prevent orphaned MinIO object if Postgres write fails
+      await storage.delete(objectKey).catch(() => undefined);
+      request.log.error(err, 'Failed to persist document metadata; cleaned up uploaded object');
+      return reply.status(503).send({
+        error: {
+          code: 'DATABASE_UNAVAILABLE',
+          message: 'Could not save document metadata. Please retry.',
+          requestId: request.id,
+        },
+      });
     }
-
-    const version = await docRepo.createNewVersion(orgId, doc.id, {
-      filePath: objectKey,
-      fileHash,
-      fileSizeBytes,
-    });
-    const versionId = version.id;
 
     const jobId = crypto.randomUUID();
     
@@ -251,23 +270,37 @@ export const documentRoutes: FastifyPluginAsync = async (fastify) => {
       request.log.error(err, 'Failed to create job tracking record');
     }
 
-    // Then enqueue the background job
-    const job = await ingestionQueue.add(
-      'ingest-document',
-      {
-        jobId,
-        documentId: doc.id,
-        versionId: versionId,
-        orgId,
-        filePath: objectKey,
-        fileType,
-      },
-      {
-        jobId: crypto.randomUUID(), // unique bullmq id
-      }
-    );
+    // Then enqueue the background job (roll back orphan object & mark failed if queue is down)
+    try {
+      const job = await ingestionQueue.add(
+        'ingest-document',
+        {
+          jobId,
+          documentId: doc.id,
+          versionId: versionId,
+          orgId,
+          filePath: objectKey,
+          fileType,
+          traceId: request.id,
+        },
+        {
+          jobId: crypto.randomUUID(), // unique bullmq id
+        }
+      );
 
-    return reply.status(201).send({ data: doc, jobId: job.id });
+      return reply.status(201).send({ data: doc, jobId: job.id });
+    } catch (err) {
+      request.log.error(err, 'Failed to enqueue ingestion job; cleaning up uploaded object');
+      await docRepo.softDelete(orgId, doc.id).catch(() => undefined);
+      await storage.delete(objectKey).catch(() => undefined);
+      return reply.status(503).send({
+        error: {
+          code: 'QUEUE_UNAVAILABLE',
+          message: 'Ingestion queue is temporarily unavailable. Please retry shortly.',
+          requestId: request.id,
+        },
+      });
+    }
   });
 
   // Upload a replacement file for an existing document — creates a new version,
@@ -316,8 +349,14 @@ export const documentRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       objectInfo = await storage.upload(objectKey, hashed, data.mimetype);
     } catch (err) {
-      request.log.error(err, 'Failed to upload file to storage');
-      return reply.status(500).send({ error: { code: 'INTERNAL_ERROR', message: 'Failed to process file' } });
+      request.log.error(err, 'Failed to upload file to object storage');
+      return reply.status(503).send({
+        error: {
+          code: 'STORAGE_UNAVAILABLE',
+          message: 'Object storage is temporarily unavailable. Please retry shortly.',
+          requestId: request.id,
+        },
+      });
     }
 
     // @fastify/multipart cuts the stream at the size limit and only flags it; without this check a
@@ -356,22 +395,36 @@ export const documentRoutes: FastifyPluginAsync = async (fastify) => {
       request.log.error(err, 'Failed to create job tracking record');
     }
 
-    const job = await ingestionQueue.add(
-      'ingest-document',
-      {
-        jobId,
-        documentId: id,
-        versionId: version.id,
-        orgId,
-        filePath: objectKey,
-        fileType: existingDoc.fileType,
-      },
-      {
-        jobId: crypto.randomUUID(),
-      }
-    );
+    try {
+      const job = await ingestionQueue.add(
+        'ingest-document',
+        {
+          jobId,
+          documentId: id,
+          versionId: version.id,
+          orgId,
+          filePath: objectKey,
+          fileType: existingDoc.fileType,
+          traceId: request.id,
+        },
+        {
+          jobId: crypto.randomUUID(),
+        }
+      );
 
-    return reply.status(201).send({ data: doc, version, jobId: job.id });
+      return reply.status(201).send({ data: doc, version, jobId: job.id });
+    } catch (err) {
+      request.log.error(err, 'Failed to enqueue version replacement job');
+      await docRepo.updateStatus(orgId, id, 'failed', 'Ingestion queue temporarily unavailable').catch(() => undefined);
+      await storage.delete(objectKey).catch(() => undefined);
+      return reply.status(503).send({
+        error: {
+          code: 'QUEUE_UNAVAILABLE',
+          message: 'Ingestion queue is temporarily unavailable. Please retry shortly.',
+          requestId: request.id,
+        },
+      });
+    }
   });
 
   // List a document's version history

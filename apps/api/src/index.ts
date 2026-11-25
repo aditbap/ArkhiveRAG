@@ -2,7 +2,7 @@ import './setup.js';
 import { assertProductionConfig } from '@rag/core';
 import { buildServer } from './server.js';
 import { startMetricsServer } from './plugins/metrics.js';
-import { redisConnection, ingestionQueue } from './queue.js';
+import { closeRedisConnections } from './queue.js';
 import { queryClient } from '@rag/database';
 
 const start = async () => {
@@ -37,8 +37,7 @@ const start = async () => {
     try {
       await server.close();
       metricsServer?.close();
-      await ingestionQueue.close();
-      await redisConnection.quit();
+      await closeRedisConnections();
       await queryClient.end({ timeout: 5 });
       process.exit(0);
     } catch (err) {

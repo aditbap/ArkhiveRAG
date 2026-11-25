@@ -122,25 +122,29 @@ Measured on real PostgreSQL 16 + `pgvector` HNSW + Cloudflare `@cf/baai/bge-m3` 
 - **Corporate RAG V2 (`auto`, `2,257` avg tokens):** **`$0.93` per 1,000 queries**
 - **`HKUDS/LightRAG` v1.5.8 (`mix`, `4,701` avg tokens):** **`$1.73` per 1,000 queries** (**46.4% cost reduction**)
 
-### 2.2 Scalability (500 → 10,000 Real Documents in PostgreSQL 16)
+### 2.2 Scalability (`10,000 → 50,000 → 100,000` Real 1024-Dim Documents in PostgreSQL, Post-`0014`)
 
-| Corpus Scale | Insert Throughput | Dense HNSW p50 / p95 | 2-Hop PPR p50 / p95 | Hybrid RRF p50 / p95 | Table + Index Size | Postgres RAM |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **500 docs** | 219 docs/s | **6.6 / 7.8 ms** | **1.6 / 5.8 ms** | 33.7 / 62.2 ms | 95 MB | 191.8 MiB |
-| **1,000 docs** | 168 docs/s | **10.8 / 16.4 ms** | **2.7 / 6.5 ms** | 69.0 / 124.0 ms | 98 MB | 194.2 MiB |
-| **10,000 docs** | 122 docs/s | **69.4 / 137.4 ms** | **1.8 / 7.5 ms** | 579.3 / 818.9 ms\* | **152 MB** | **222.3 MiB** |
+Measured on single-node Docker PostgreSQL 15.20 (`shared_buffers=128MB`, `work_mem=4MB`, `DATABASE_POOL_MAX=25`) with 1024-dim normalized vectors and migration `0014` stored `content_tsv` GIN (`scripts/ops/bench-scale-load.mts`):
 
-> \* At 10k docs, HNSW (`69.4 ms`) and 2-hop PPR (`1.8 ms`) stay sub-75 ms; remaining Hybrid RRF latency comes from on-the-fly `ts_rank_cd()` FTS scoring, which can be brought under `20 ms` by adding a stored generated `tsvector` column and raising `DATABASE_POOL_MAX`.
+| Corpus Scale | Insert Throughput | Dense HNSW `p50 / p95 / p99` | Stored `content_tsv` FTS (`0014`) `p50 / p95 / p99` | Hybrid RRF `p50 / p95 / p99` | 2-Hop PPR `p50` | Table + Index Size | Postgres RAM |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **10,000 docs** | `140.6 docs/s` | **`46.7 / 52.5 / 54.9 ms`** | **`30.8 / 84.7 / 85.5 ms`** *(**18.5× faster** than pre-`0014`)* | **`51.2 / 87.4 / 87.9 ms`** *(**11.3× faster** than pre-`0014`)* | **`7.0 ms`** | `160.6 MB` | `227.8 MiB` |
+| **50,000 docs** | `66.1 docs/s` | `163.5 / 253.8 / 300.3 ms` | `204.9 / 396.0 / 396.0 ms` | `385.2 / 597.3 / 607.5 ms` | **`10.7 ms`** | `747.7 MB` | `320.1 MiB` |
+| **100,000 docs** | `34.1 docs/s` | `356.4 / 929.7 / 929.7 ms` | `263.1 / 381.8 / 416.0 ms` | `544.5 / 878.5 / 935.7 ms` | **`11.1 ms`** | `1,475.6 MB` | `270.0 MiB` |
 
-### 2.3 Golden Quality, Security & Concurrent Load Summary
+> \* **Capacity & Sizing Note:** At `100,000` docs (`1.48 GB` table+index), `0 / 970` requests errored across `10 / 50 / 100 / 250 / 500` concurrent VUs and mixed `50` readers + `10×2` transactional writers (`0` duplicate chunks). Because default Docker `shared_buffers=128MB` forces disk I/O thrashing once HNSW exceeds 128 MB, production deployments at `50k–100k` docs should provision `shared_buffers = 2GB–4GB`, `effective_cache_size = 6GB–12GB`, `work_mem = 32MB`, and PgBouncer/read replicas for `>100` concurrent VUs.
+
+### 2.3 Golden Quality, Chaos Resilience, Security & Backup Verification (V2.6)
 
 | Validation Pillar | Measured Result |
 | :--- | :--- |
 | **54-Query Golden Suite (9 Categories)** | **`0.9935` Full-Recall@5** · **`0.9706` MRR** · **`931` avg context tokens** |
 | **Live Answer Citation Integrity** | **`36 / 36` (100.0%)** citations mapped strictly to authorized retrieved chunks |
-| **RBAC & Multi-Tenant Isolation** | **`8/8` RBAC matrix pass** · **`0` cross-tenant leaks** · **`0` doc-ACL leaks** (including PPR & RAPTOR `<@`) |
+| **Multi-Tenant, Draft & ACL Isolation (Concurrent)** | **`8/8` RBAC pass** · **40 concurrent mixed-tenant queries with identical 1.0 vectors: `0` cross-tenant leaks, `0` draft leaks, `0` doc-ACL leaks** (including KG, PPR, RAPTOR `<@`, & ACL-revocation cache keys) |
 | **Prompt-Injection Red-Team (6 Live Attacks)** | **`6 / 6` (100%) blocked** (indirect poisoned doc, system override, prompt extraction, roleplay jailbreak, cross-tenant probe, citation forgery) |
-| **Concurrent Load @ 10,000 Docs** | `10 VUs` (`40` reqs), `25 VUs` (`100` reqs), `50 VUs` (`200` reqs) — **`0 / 340` errors (0.00%)** on `256 MiB` Postgres RAM + `12 MiB` Redis RAM |
+| **Live Chaos Drills (V2.6)** | **Redis pause:** `/ready=503`, 5/5 HTTP fail-open in `<511 ms`, `/metrics=200` in `511 ms`, auto-recovers in `13 ms` · **MinIO pause:** 10/10 Postgres retrievals succeed · **Worker `SIGKILL`:** atomic `replaceVersionChunks` recovers exact `5/5` chunks (`0` duplicates) · **Runaway query:** `statement_timeout` aborts (`57014`) in `336 ms` |
+| **Backup & Non-Destructive Restore Drill** | `scripts/ops/backup.sh` + `restore.sh` verified SHA-256 (`postgres.dump` + distroless MinIO), **100% row-count parity**, and `2/2` critical indexes (`HNSW` + `content_tsv` GIN) |
+| **Concurrent Load @ 100,000 Docs** | `10 / 50 / 100 / 250 / 500` VUs + mixed 50 readers / 10×2 writers — **`0 / 970` errors (0.00%)** |
 
 ---
 

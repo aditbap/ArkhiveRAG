@@ -10,6 +10,17 @@ const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
 
 export const redisConnection = new Redis(redisUrl, {
   maxRetriesPerRequest: null,
+  connectTimeout: 2000,
+  retryStrategy: (times: number) => Math.min(times * 250, 5000),
+});
+
+let lastRedisErrLog = 0;
+redisConnection.on('error', (err) => {
+  const now = Date.now();
+  if (now - lastRedisErrLog >= 10_000) {
+    lastRedisErrLog = now;
+    console.warn(`[Worker:Redis] connection error: ${err.message}`);
+  }
 });
 
 export const ingestionQueue = new Queue(INGESTION_QUEUE_NAME, {
@@ -18,9 +29,9 @@ export const ingestionQueue = new Queue(INGESTION_QUEUE_NAME, {
     attempts: 3,
     backoff: {
       type: 'exponential',
-      delay: 1000,
+      delay: 2000,
     },
-    removeOnComplete: true,
-    removeOnFail: false,
+    removeOnComplete: { count: 1000 },
+    removeOnFail: { count: 5000 },
   },
 });
