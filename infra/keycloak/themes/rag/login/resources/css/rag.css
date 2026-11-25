@@ -76,7 +76,20 @@ body, .pf-v5-c-login, .pf-v5-c-login *:not(i):not(.fas):not(.far):not(.fab):not(
 /* Brand line above the card */
 #kc-header { padding: 0; margin: 0 0 1rem; text-align: center; }
 #kc-header-wrapper, .pf-v5-c-brand {
-  display: block; height: auto; color: var(--rag-fg) !important; font-size: 1rem; font-weight: 600; line-height: 1.5; text-align: center; text-transform: none; letter-spacing: 0;
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+  height: auto; color: var(--rag-fg) !important; font-size: 1rem; font-weight: 600; line-height: 1.5; text-align: center; text-transform: none; letter-spacing: 0;
+}
+#kc-header-wrapper::before {
+  content: ""; width: 1.625rem; height: 1.625rem; flex-shrink: 0;
+  background: url("../img/arkhiverag-icon.png") center / contain no-repeat;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) #kc-header-wrapper::before {
+    background-image: url("../img/arkhiverag-icon-dark.png");
+  }
+}
+:root[data-theme="dark"] #kc-header-wrapper::before {
+  background-image: url("../img/arkhiverag-icon-dark.png");
 }
 
 /* Card */

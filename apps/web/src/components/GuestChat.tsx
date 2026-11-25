@@ -8,6 +8,7 @@ import TextareaAutosize from 'react-textarea-autosize'
 import { Button } from '@/components/ui/button'
 import { login, register } from '@/app/login/actions'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { BrandMark } from '@/components/BrandMark'
 
 interface GuestMessage {
   id: string
@@ -90,7 +91,8 @@ export function GuestChat() {
 
   return (
     <div className="flex h-screen flex-col bg-zinc-100 dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100">
-      <header className="flex h-14 shrink-0 items-center justify-end px-4">
+      <header className="flex h-14 shrink-0 items-center justify-between px-4">
+        <BrandMark size={24} showWordmark />
         <div className="flex items-center gap-2">
           <ThemeToggle />
           <form action={login}>
@@ -105,6 +107,7 @@ export function GuestChat() {
       <div className="relative flex-1 overflow-y-auto">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-4 pb-32 text-center">
+            <BrandMark size={48} className="mb-3" />
             <h1 className="text-[22px] font-normal">Let&apos;s chat with ArkhiveRAG</h1>
             <p className="mt-2 max-w-md text-sm text-zinc-600 dark:text-zinc-400">
               Guest chats are not saved. Sign in to upload documents, ask questions about them with cited sources, and keep your history.

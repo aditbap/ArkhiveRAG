@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import { getAccessToken } from '@/lib/auth-client'
 import { usePathname } from 'next/navigation'
 import { LibrarySwitcher } from '@/components/LibrarySwitcher'
+import { BrandMark } from '@/components/BrandMark'
 import { ProfileMenu } from '@/components/ProfileMenu'
 import { hardNavigate } from '@/lib/active-library'
 
@@ -58,7 +59,13 @@ export function Sidebar({ logoutAction }: { logoutAction: () => void }) {
 
   return (
     <aside className="w-[260px] h-full bg-zinc-50 dark:bg-zinc-950 border-r border-zinc-200 dark:border-zinc-800 flex flex-col shrink-0">
-      <div className="pt-4">
+      <div className="px-4 pt-3.5 pb-1">
+        <Link href="/dashboard/chat" className="inline-flex items-center rounded-md focus:outline-none">
+          <BrandMark size={24} showWordmark />
+        </Link>
+      </div>
+
+      <div className="pt-2">
         <LibrarySwitcher />
       </div>
 

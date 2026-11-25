@@ -13,6 +13,7 @@ import type { ChatMessage, Citation, RagMode } from '@/types/chat'
 import { useLibraryAccess, readApiError } from '@/lib/active-library'
 import { loadChatScope, saveChatScope } from '@/lib/chat-scope'
 import { createSpeechSession, isSpeechSupported, type SpeechSession } from '@/lib/speech'
+import { BrandMark } from '@/components/BrandMark'
 
 type Message = ChatMessage
 
@@ -486,6 +487,7 @@ export function ChatArea({
         <div className={`w-full max-w-3xl ${messages.length > 0 ? 'pointer-events-auto' : ''}`}>
           {messages.length === 0 && (
             <div className="text-center mb-8 pointer-events-none">
+              <BrandMark size={48} className="mx-auto mb-3" />
               <h2 className="text-[22px] font-normal text-zinc-900 dark:text-zinc-100">Let&apos;s Chat with ArkhiveRAG</h2>
             </div>
           )}
