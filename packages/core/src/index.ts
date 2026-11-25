@@ -16,3 +16,4 @@ export * from './lightrag/index.js';
 export * from './retrieval/index.js';
 export * from './learning/index.js';
 export * from './utils/singleflight.js';
+export * from './agent/index.js';

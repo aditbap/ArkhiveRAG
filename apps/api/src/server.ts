@@ -12,6 +12,7 @@ import { conversationsRoutes } from './routes/conversations.js';
 import folderRoutes from './routes/folders.js';
 import { libraryRoutes } from './routes/libraries.js';
 import { learningRoutes } from './routes/learning.js';
+import { agentRoutes } from './routes/agent.js';
 import { ragRedisDegraded, registerMetrics } from './plugins/metrics.js';
 import { redisConnection } from './queue.js';
 import { consumeRateLimit } from './lib/rate-limit.js';
@@ -138,6 +139,7 @@ export function buildServer(): FastifyInstance {
     api.register(folderRoutes, { prefix: '/folders' });
     api.register(libraryRoutes, { prefix: '/libraries' });
     api.register(learningRoutes, { prefix: '/retrieval' });
+    api.register(agentRoutes, { prefix: '/agent' });
   }, { prefix: '/api/v1' });
 
   return server;

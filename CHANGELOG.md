@@ -2,6 +2,19 @@
 
 All notable changes to **Corporate Adaptive RAG** are documented in this file.
 
+## [v3.1.0] - 2026-11-25 — RBAC-Enforced Agentic RAG & Evaluation
+
+### Added
+- **Zero-Trust Agent Policy Guard & Bounded Orchestrator (`packages/core/src/agent`, `apps/api/src/lib/company-agent.ts`):**
+  - Deterministic `authorizeToolCall`, `detectOutOfAuthorityRequest`, and bounded (`<= 3` steps) `planAgentToolsDeterministic` deciding when to search active/draft documents, query read-only database tools, combine both, answer directly, or fail-closed refuse unauthorized, cross-tenant, raw-SQL, secret-exfiltration, or write probes.
+- **Allowlisted Read-Only PostgreSQL Agent Tools (`AgentToolsRepository`):**
+  - Parameterized, strictly tenant-scoped read-only queries on `readDb`: `query_document_inventory`, `query_governance_audit`, `query_workspace_members`, `query_ingestion_jobs`, and owner-only `query_security_audit_logs`, with persistent `audit_logs` allow/deny recording.
+- **HTTP Agent Endpoints, Chat Integration & Telemetry:**
+  - Added `GET /api/v1/agent/tools`, `POST /api/v1/agent/query`, `GET /api/v1/agent/audit` (`owner` only), and optional `agentic: true` (role-isolated cache) on `POST /api/v1/chat/completions`.
+  - Added Prometheus `rag_agent_tool_calls_total`, `rag_agent_policy_denials_total`, `rag_agent_steps_count`, `RagAgentPolicyDenialSpike` alert, and Grafana Agentic panel.
+- **Automated RBAC Agent Evaluation (`pnpm ops:eval-agent`):**
+  - Added `evaluateAgentSuite` + live 24-case multi-role/adversarial Postgres evaluation (`scripts/ops/eval-agentic-rag.mts`) + `apps/api/test/unit/v31-agentic-rag.test.ts`, wired into `.github/workflows/integration.yml`.
+
 ## [v3.0.0] - 2026-11-25
 
 ### Added

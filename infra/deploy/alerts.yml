@@ -109,3 +109,13 @@ groups:
         annotations:
           summary: "Worker stalled or failing ingestion jobs detected"
           description: "BullMQ reported stalled jobs or >5 failed ingestion jobs over the last 15m."
+
+      - alert: RagAgentPolicyDenialSpike
+        expr: sum(increase(rag_agent_policy_denials_total[15m])) > 20
+        for: 2m
+        labels:
+          severity: warning
+          service: agent
+        annotations:
+          summary: "High rate of RBAC agent policy refusals (>20 in 15m)"
+          description: "rag_agent_policy_denials_total spiked by {{ $value }} in 15m. Inspect /api/v1/agent/audit for privilege probing or injection attempts."
