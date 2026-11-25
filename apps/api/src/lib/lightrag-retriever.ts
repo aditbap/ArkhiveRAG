@@ -29,6 +29,7 @@ import {
   scoreCandidateWithLtr,
   selectDiverseNonDuplicateCandidates,
   shouldDecomposeQuery,
+  SingleflightGroup,
   traceTopPprPaths,
   verifyMultiHopEvidenceCoverage,
   weightedReciprocalRankFusion,
@@ -164,6 +165,49 @@ interface InternalCandidate extends ContextChunkInput {
   updatedAt?: Date | string | null;
 }
 
+const HAS_GRAPH_CACHE_TTL_MS = 30_000;
+const HAS_GRAPH_CACHE_MAX_ENTRIES = 500;
+const hasGraphCacheByRepo = new WeakMap<object, Map<string, { value: boolean; expiresAt: number }>>();
+const chunkSearchFlightByRepo = new WeakMap<object, SingleflightGroup>();
+
+function hashScopeIds(documentIds?: string[]): string {
+  if (!documentIds || documentIds.length === 0) return 'all';
+  const sorted = [...new Set(documentIds)].sort().join(',');
+  return crypto.createHash('sha1').update(sorted).digest('hex').slice(0, 16);
+}
+
+function getGraphCache(repo: object) {
+  let cache = hasGraphCacheByRepo.get(repo);
+  if (!cache) {
+    cache = new Map();
+    hasGraphCacheByRepo.set(repo, cache);
+  }
+  return cache;
+}
+
+function getChunkSearchFlight(repo: object) {
+  let group = chunkSearchFlightByRepo.get(repo);
+  if (!group) {
+    group = new SingleflightGroup();
+    chunkSearchFlightByRepo.set(repo, group);
+  }
+  return group;
+}
+
+/** Clears cached `hasGraphData` entries for a repository (useful on KG ingestion or in tests). */
+export function invalidateGraphDataCache(kgRepo: object, orgId?: string): void {
+  const cache = hasGraphCacheByRepo.get(kgRepo);
+  if (!cache) return;
+  if (!orgId) {
+    cache.clear();
+    return;
+  }
+  const prefix = `${orgId}|`;
+  for (const key of cache.keys()) {
+    if (key.startsWith(prefix)) cache.delete(key);
+  }
+}
+
 export class LightRagRetriever {
   private readonly chunkRepo: ChunkRepository;
   private readonly kgRepo: KnowledgeGraphRepository;
@@ -286,6 +330,28 @@ export class LightRagRetriever {
     return Promise.all(texts.map((t) => this.embedder.embedQuery(t)));
   }
 
+  private async checkHasGraphData(orgId: string, documentIds?: string[]): Promise<boolean> {
+    const scopeHash = hashScopeIds(documentIds);
+    const localKey = `${orgId}|${scopeHash}`;
+    const cache = getGraphCache(this.kgRepo);
+    const now = Date.now();
+    const cached = cache.get(localKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.value;
+    }
+
+    const flight = getChunkSearchFlight(this.kgRepo);
+    return flight.run(`hasGraph:${localKey}`, async () => {
+      const value = await this.kgRepo.hasGraphData(orgId, documentIds).catch(() => false);
+      if (cache.size >= HAS_GRAPH_CACHE_MAX_ENTRIES) {
+        const oldestKey = cache.keys().next().value;
+        if (oldestKey !== undefined) cache.delete(oldestKey);
+      }
+      cache.set(localKey, { value, expiresAt: Date.now() + HAS_GRAPH_CACHE_TTL_MS });
+      return value;
+    });
+  }
+
   private async runHybridChunkSearch(
     orgId: string,
     queryText: string,
@@ -297,73 +363,84 @@ export class LightRagRetriever {
     documentIds?: string[],
     governance?: { includeDrafts?: boolean; includeArchived?: boolean; asOfDate?: Date | null },
   ): Promise<InternalCandidate[]> {
-    const [denseResults, ftsResults] = await Promise.all([
-      this.chunkRepo.searchSimilar(orgId, queryEmbedding, chunkTopK, cosineThreshold, documentIds, governance),
-      this.chunkRepo.searchFullText(orgId, queryText, chunkTopK, documentIds, governance),
-    ]);
+    // Tenant + ACL + governance isolated singleflight coalesces identical burst queries
+    // without ever sharing results across tenants or permission scopes.
+    const govKey = `${governance?.includeDrafts ? 1 : 0}:${governance?.includeArchived ? 1 : 0}:${governance?.asOfDate ? governance.asOfDate.toISOString() : ''}`;
+    const flightKey = `hybrid:${orgId}|${hashScopeIds(documentIds)}|${govKey}|${chunkTopK}|${cosineThreshold.toFixed(3)}|${denseWeight.toFixed(2)}|${bm25Weight.toFixed(2)}|${queryText.trim().toLowerCase()}`;
+    const flight = getChunkSearchFlight(this.chunkRepo);
 
-    const denseById = new Map(denseResults.map((r) => [r.chunk.id, r.similarity]));
-    const maxFtsRank = Math.max(1e-6, ...ftsResults.map((r) => Number(r.rank) || 0));
-    const ftsById = new Map(ftsResults.map((r) => [r.chunk.id, (Number(r.rank) || 0) / maxFtsRank]));
+    const results = await flight.run(flightKey, async () => {
+      const [denseResults, ftsResults] = await Promise.all([
+        this.chunkRepo.searchSimilar(orgId, queryEmbedding, chunkTopK, cosineThreshold, documentIds, governance),
+        this.chunkRepo.searchFullText(orgId, queryText, chunkTopK, documentIds, governance),
+      ]);
 
-    type ChunkWithDoc = {
-      chunk: (typeof denseResults)[number]['chunk'];
-      document: (typeof denseResults)[number]['document'];
-    };
+      const denseById = new Map(denseResults.map((r) => [r.chunk.id, r.similarity]));
+      const maxFtsRank = Math.max(1e-6, ...ftsResults.map((r) => Number(r.rank) || 0));
+      const ftsById = new Map(ftsResults.map((r) => [r.chunk.id, (Number(r.rank) || 0) / maxFtsRank]));
 
-    const fused = weightedReciprocalRankFusion<ChunkWithDoc>(
-      [
-        { items: denseResults, weight: denseWeight },
-        { items: ftsResults, weight: bm25Weight },
-      ],
-      (item) => item.chunk.id,
-      60,
-    );
-
-    return fused.slice(0, chunkTopK).map(({ item, score }) => {
-      const doc = item.document as typeof item.document & {
-        effectiveAt?: Date | string | null;
-        expiresAt?: Date | string | null;
-        supersedesDocumentId?: string | null;
-        authorityTier?: number | null;
-        governanceStatus?: string | null;
+      type ChunkWithDoc = {
+        chunk: (typeof denseResults)[number]['chunk'];
+        document: (typeof denseResults)[number]['document'];
       };
-      const ch = item.chunk as typeof item.chunk & {
-        parentChunkId?: string | null;
-        chunkRole?: 'parent' | 'child' | 'standalone';
-      };
-      const denseSim = denseById.get(item.chunk.id) ?? 0;
-      const bm25Norm = ftsById.get(item.chunk.id) ?? 0;
-      return {
-        id: item.chunk.id,
-        documentId: item.document.id,
-        documentTitle: item.document.title,
-        fileName: item.document.fileName,
-        fileType: item.document.fileType,
-        content: item.chunk.content,
-        sectionHeading: item.chunk.sectionHeading,
-        pageNumber: item.chunk.pageNumber,
-        parentChunkId: ch.parentChunkId ?? null,
-        chunkRole: ch.chunkRole ?? 'standalone',
-        effectiveAt: doc.effectiveAt ?? null,
-        expiresAt: doc.expiresAt ?? null,
-        supersedesDocumentId: doc.supersedesDocumentId ?? null,
-        authorityTier: doc.authorityTier ?? null,
-        governanceStatus: doc.governanceStatus ?? 'active',
-        createdAt: item.document.createdAt,
-        updatedAt: item.document.updatedAt,
-        similarity: score,
-        source: 'hybrid' as const,
-        denseSim,
-        bm25Norm,
-        entityHit: 0,
-        relationHit: 0,
-        pprScore: 0,
-        maxsimScore: denseSim,
-        crossEncoderScore: 0,
-        siblingHits: 1,
-      };
+
+      const fused = weightedReciprocalRankFusion<ChunkWithDoc>(
+        [
+          { items: denseResults, weight: denseWeight },
+          { items: ftsResults, weight: bm25Weight },
+        ],
+        (item) => item.chunk.id,
+        60,
+      );
+
+      return fused.slice(0, chunkTopK).map(({ item, score }) => {
+        const doc = item.document as typeof item.document & {
+          effectiveAt?: Date | string | null;
+          expiresAt?: Date | string | null;
+          supersedesDocumentId?: string | null;
+          authorityTier?: number | null;
+          governanceStatus?: string | null;
+        };
+        const ch = item.chunk as typeof item.chunk & {
+          parentChunkId?: string | null;
+          chunkRole?: 'parent' | 'child' | 'standalone';
+        };
+        const denseSim = denseById.get(item.chunk.id) ?? 0;
+        const bm25Norm = ftsById.get(item.chunk.id) ?? 0;
+        return {
+          id: item.chunk.id,
+          documentId: item.document.id,
+          documentTitle: item.document.title,
+          fileName: item.document.fileName,
+          fileType: item.document.fileType,
+          content: item.chunk.content,
+          sectionHeading: item.chunk.sectionHeading,
+          pageNumber: item.chunk.pageNumber,
+          parentChunkId: ch.parentChunkId ?? null,
+          chunkRole: ch.chunkRole ?? 'standalone',
+          effectiveAt: doc.effectiveAt ?? null,
+          expiresAt: doc.expiresAt ?? null,
+          supersedesDocumentId: doc.supersedesDocumentId ?? null,
+          authorityTier: doc.authorityTier ?? null,
+          governanceStatus: doc.governanceStatus ?? 'active',
+          createdAt: item.document.createdAt,
+          updatedAt: item.document.updatedAt,
+          similarity: score,
+          source: 'hybrid' as const,
+          denseSim,
+          bm25Norm,
+          entityHit: 0,
+          relationHit: 0,
+          pprScore: 0,
+          maxsimScore: denseSim,
+          crossEncoderScore: 0,
+          siblingHits: 1,
+        };
+      });
     });
+
+    // Return per-caller copies so downstream scoring/mutation never aliases across coalesced callers.
+    return results.map((c) => ({ ...c }));
   }
 
   async retrieve(input: LightRagRetrievalInput): Promise<LightRagRetrievalResult> {
@@ -405,7 +482,7 @@ export class LightRagRetriever {
     let routingReason = isCragRetry ? 'crag_escalate_retry' : plan.reason;
 
     if (effectiveMode !== 'naive') {
-      const hasKg = await this.kgRepo.hasGraphData(input.orgId, input.documentIds).catch(() => false);
+      const hasKg = await this.checkHasGraphData(input.orgId, input.documentIds);
       if (!hasKg) {
         effectiveMode = 'naive';
         routingReason = 'empty_kg_fallback';

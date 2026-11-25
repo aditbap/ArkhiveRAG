@@ -58,7 +58,7 @@ fi
 echo "[Restore] Recreating target database '${TARGET_DB}' on ${PG_CONTAINER}..."
 docker exec "${PG_CONTAINER}" psql -U "${PG_USER}" -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"${TARGET_DB}\";"
 docker exec "${PG_CONTAINER}" psql -U "${PG_USER}" -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"${TARGET_DB}\";"
-docker exec "${PG_CONTAINER}" psql -U "${PG_USER}" -d "${TARGET_DB}" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector;"
+docker exec "${PG_CONTAINER}" psql -U "${PG_USER}" -d "${TARGET_DB}" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS btree_gin;"
 
 echo "[Restore] Restoring postgres.dump into '${TARGET_DB}'..."
 docker exec -i "${PG_CONTAINER}" pg_restore \
@@ -72,7 +72,7 @@ echo "[Restore] Verifying restored row counts & pgvector HNSW index..."
 RESTORED_COUNTS="$(docker exec "${PG_CONTAINER}" psql -U "${PG_USER}" -d "${TARGET_DB}" -tAc \
   "SELECT count(*) || ' chunks | ' || (SELECT count(*) FROM documents) || ' docs | ' || (SELECT count(*) FROM kg_entities) || ' entities | ' || (SELECT count(*) FROM kg_relations) || ' relations' FROM document_chunks;")"
 INDEX_COUNT="$(docker exec "${PG_CONTAINER}" psql -U "${PG_USER}" -d "${TARGET_DB}" -tAc \
-  "SELECT count(*) FROM pg_indexes WHERE tablename = 'document_chunks' AND indexname IN ('idx_chunks_embedding_hnsw', 'idx_chunks_content_tsv_gin');")"
+  "SELECT count(*) FROM pg_indexes WHERE tablename = 'document_chunks' AND indexname IN ('idx_chunks_embedding_hnsw', 'idx_chunks_org_content_tsv_gin', 'idx_chunks_content_tsv_gin');")"
 
 echo "[Restore] Restored counts: ${RESTORED_COUNTS}"
 echo "[Restore] Critical indexes verified: ${INDEX_COUNT}/2 (HNSW + stored content_tsv GIN)"

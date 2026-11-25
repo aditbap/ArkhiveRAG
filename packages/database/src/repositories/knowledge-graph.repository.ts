@@ -1,6 +1,7 @@
 import { BaseRepository } from './base.repository.js';
 import { kgEntities, kgEntityAliases, kgRelations, llmCache } from '../schema/knowledge-graph.js';
 import { documents } from '../schema/documents.js';
+import { HNSW_EF_SEARCH_DEFAULT, withHnswSearch } from '../client.js';
 import {
   CONSTANTS,
   weightedReciprocalRankFusion,
@@ -22,6 +23,14 @@ function uuidArraySql(ids: string[]) {
   return sql`ARRAY[${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)}]::uuid[]`;
 }
 
+function extractRows<T extends Record<string, unknown>>(res: unknown): T[] {
+  if (Array.isArray(res)) return res as T[];
+  if (res && typeof res === 'object' && 'rows' in res && Array.isArray((res as { rows: unknown[] }).rows)) {
+    return (res as { rows: T[] }).rows;
+  }
+  return [];
+}
+
 export class KnowledgeGraphRepository extends BaseRepository {
   constructor() {
     super('kg_entities');
@@ -34,7 +43,7 @@ export class KnowledgeGraphRepository extends BaseRepository {
     if (documentIds && documentIds.length > 0) {
       conditions.push(sql`${kgEntities.documentIds} && ${uuidArraySql(documentIds)}`);
     }
-    const rows = await this.db
+    const rows = await this.readDb
       .select({ id: kgEntities.id })
       .from(kgEntities)
       .where(and(...conditions))
@@ -203,8 +212,8 @@ export class KnowledgeGraphRepository extends BaseRepository {
   }
 
   /**
-   * Local retrieval branch: vector similarity search over `kg_entities`
-   * ordered by cosine similarity with entity degree as secondary tie-breaker.
+   * Local retrieval branch: HNSW-accelerated vector similarity search over `kg_entities`
+   * ordered by raw cosine distance `embedding <=> vec ASC` with entity degree as secondary tie-breaker.
    */
   async searchEntities(
     orgId: string,
@@ -214,34 +223,52 @@ export class KnowledgeGraphRepository extends BaseRepository {
     documentIds?: string[],
   ): Promise<RetrievedEntity[]> {
     this.requireTenant(orgId);
-    const similarity = sql<number>`1 - (${kgEntities.embedding} <=> ${JSON.stringify(embedding)}::vector)`;
-    const conditions = [
-      eq(kgEntities.orgId, orgId),
-      sql`${kgEntities.embedding} IS NOT NULL`,
-      gte(similarity, minSimilarity),
-    ];
-    if (documentIds && documentIds.length > 0) {
-      conditions.push(sql`${kgEntities.documentIds} && ${uuidArraySql(documentIds)}`);
-    }
+    const vecLiteral = JSON.stringify(embedding);
+    const maxDistance = Math.max(0, Math.min(2, 1 - minSimilarity));
+    const overfetch = Math.min(Math.max(limit * 4, 48), 250);
+    const efSearch = Math.max(HNSW_EF_SEARCH_DEFAULT, overfetch);
+    const docFilterSql =
+      documentIds && documentIds.length > 0
+        ? sql`AND document_ids && ${uuidArraySql(documentIds)}`
+        : sql``;
 
-    const rows = await this.db
-      .select({
-        id: kgEntities.id,
-        entityName: kgEntities.entityName,
-        canonicalName: kgEntities.canonicalName,
-        entityType: kgEntities.entityType,
-        description: kgEntities.description,
-        degree: kgEntities.degree,
-        sourceChunkIds: kgEntities.sourceChunkIds,
-        documentIds: kgEntities.documentIds,
-        similarity,
-      })
-      .from(kgEntities)
-      .where(and(...conditions))
-      .orderBy(desc(similarity), desc(kgEntities.degree))
-      .limit(limit);
+    const rows = await withHnswSearch(this.readDb, efSearch, async (tx) => {
+      const res = await tx.execute(sql`
+        WITH hnsw_candidates AS (
+          SELECT
+            id, entity_name, canonical_name, entity_type, description,
+            degree, source_chunk_ids, document_ids,
+            (embedding <=> ${vecLiteral}::vector) AS distance
+          FROM kg_entities
+          WHERE org_id = ${orgId}::uuid
+            AND embedding IS NOT NULL
+            ${docFilterSql}
+          ORDER BY embedding <=> ${vecLiteral}::vector ASC
+          LIMIT ${overfetch}
+        )
+        SELECT
+          id, entity_name, canonical_name, entity_type, description,
+          degree, source_chunk_ids, document_ids,
+          (1.0 - distance)::float8 AS similarity
+        FROM hnsw_candidates
+        WHERE distance <= ${maxDistance}
+        ORDER BY distance ASC, degree DESC
+        LIMIT ${limit}
+      `);
+      return extractRows<Record<string, unknown>>(res);
+    });
 
-    return rows.map((r) => ({ ...r, similarity: Number(r.similarity) }));
+    return rows.map((r) => ({
+      id: String(r.id),
+      entityName: String(r.entity_name),
+      canonicalName: String(r.canonical_name),
+      entityType: String(r.entity_type),
+      description: String(r.description),
+      degree: Number(r.degree),
+      sourceChunkIds: Array.isArray(r.source_chunk_ids) ? (r.source_chunk_ids as string[]) : [],
+      documentIds: Array.isArray(r.document_ids) ? (r.document_ids as string[]) : [],
+      similarity: Number(r.similarity),
+    }));
   }
 
   /**
@@ -270,7 +297,7 @@ export class KnowledgeGraphRepository extends BaseRepository {
       conditions.push(sql`${kgEntities.documentIds} && ${uuidArraySql(documentIds)}`);
     }
 
-    const rows = await this.db
+    const rows = await this.readDb
       .select({
         id: kgEntities.id,
         entityName: kgEntities.entityName,
@@ -319,8 +346,8 @@ export class KnowledgeGraphRepository extends BaseRepository {
   }
 
   /**
-   * Global retrieval branch: vector similarity search over `kg_relations`
-   * ordered by cosine similarity with relation weight as secondary tie-breaker.
+   * Global retrieval branch: HNSW-accelerated vector similarity search over `kg_relations`
+   * ordered by raw cosine distance `embedding <=> vec ASC` with relation weight as secondary tie-breaker.
    */
   async searchRelations(
     orgId: string,
@@ -330,36 +357,54 @@ export class KnowledgeGraphRepository extends BaseRepository {
     documentIds?: string[],
   ): Promise<RetrievedRelation[]> {
     this.requireTenant(orgId);
-    const similarity = sql<number>`1 - (${kgRelations.embedding} <=> ${JSON.stringify(embedding)}::vector)`;
-    const conditions = [
-      eq(kgRelations.orgId, orgId),
-      sql`${kgRelations.embedding} IS NOT NULL`,
-      gte(similarity, minSimilarity),
-    ];
-    if (documentIds && documentIds.length > 0) {
-      conditions.push(sql`${kgRelations.documentIds} && ${uuidArraySql(documentIds)}`);
-    }
+    const vecLiteral = JSON.stringify(embedding);
+    const maxDistance = Math.max(0, Math.min(2, 1 - minSimilarity));
+    const overfetch = Math.min(Math.max(limit * 4, 48), 250);
+    const efSearch = Math.max(HNSW_EF_SEARCH_DEFAULT, overfetch);
+    const docFilterSql =
+      documentIds && documentIds.length > 0
+        ? sql`AND document_ids && ${uuidArraySql(documentIds)}`
+        : sql``;
 
-    const rows = await this.db
-      .select({
-        id: kgRelations.id,
-        sourceEntity: kgRelations.sourceEntity,
-        targetEntity: kgRelations.targetEntity,
-        sourceCanonical: kgRelations.sourceCanonical,
-        targetCanonical: kgRelations.targetCanonical,
-        keywords: kgRelations.keywords,
-        description: kgRelations.description,
-        weight: kgRelations.weight,
-        sourceChunkIds: kgRelations.sourceChunkIds,
-        documentIds: kgRelations.documentIds,
-        similarity,
-      })
-      .from(kgRelations)
-      .where(and(...conditions))
-      .orderBy(desc(similarity), desc(kgRelations.weight))
-      .limit(limit);
+    const rows = await withHnswSearch(this.readDb, efSearch, async (tx) => {
+      const res = await tx.execute(sql`
+        WITH hnsw_candidates AS (
+          SELECT
+            id, source_entity, target_entity, source_canonical, target_canonical,
+            keywords, description, weight, source_chunk_ids, document_ids,
+            (embedding <=> ${vecLiteral}::vector) AS distance
+          FROM kg_relations
+          WHERE org_id = ${orgId}::uuid
+            AND embedding IS NOT NULL
+            ${docFilterSql}
+          ORDER BY embedding <=> ${vecLiteral}::vector ASC
+          LIMIT ${overfetch}
+        )
+        SELECT
+          id, source_entity, target_entity, source_canonical, target_canonical,
+          keywords, description, weight, source_chunk_ids, document_ids,
+          (1.0 - distance)::float8 AS similarity
+        FROM hnsw_candidates
+        WHERE distance <= ${maxDistance}
+        ORDER BY distance ASC, weight DESC
+        LIMIT ${limit}
+      `);
+      return extractRows<Record<string, unknown>>(res);
+    });
 
-    return rows.map((r) => ({ ...r, similarity: Number(r.similarity) }));
+    return rows.map((r) => ({
+      id: String(r.id),
+      sourceEntity: String(r.source_entity),
+      targetEntity: String(r.target_entity),
+      sourceCanonical: String(r.source_canonical),
+      targetCanonical: String(r.target_canonical),
+      keywords: String(r.keywords),
+      description: String(r.description),
+      weight: Number(r.weight),
+      sourceChunkIds: Array.isArray(r.source_chunk_ids) ? (r.source_chunk_ids as string[]) : [],
+      documentIds: Array.isArray(r.document_ids) ? (r.document_ids as string[]) : [],
+      similarity: Number(r.similarity),
+    }));
   }
 
   /**
@@ -387,7 +432,7 @@ export class KnowledgeGraphRepository extends BaseRepository {
       conditions.push(sql`${kgRelations.documentIds} && ${uuidArraySql(documentIds)}`);
     }
 
-    const rows = await this.db
+    const rows = await this.readDb
       .select({
         id: kgRelations.id,
         sourceEntity: kgRelations.sourceEntity,
@@ -462,7 +507,7 @@ export class KnowledgeGraphRepository extends BaseRepository {
     }
 
     const docSpread = sql<number>`COALESCE(array_length(${kgRelations.documentIds}, 1), 1)`;
-    const rows = await this.db
+    const rows = await this.readDb
       .select({
         id: kgRelations.id,
         sourceEntity: kgRelations.sourceEntity,
@@ -505,7 +550,7 @@ export class KnowledgeGraphRepository extends BaseRepository {
       conditions.push(sql`${kgEntities.documentIds} && ${uuidArraySql(documentIds)}`);
     }
 
-    const rows = await this.db
+    const rows = await this.readDb
       .select({
         id: kgEntities.id,
         entityName: kgEntities.entityName,
@@ -552,7 +597,7 @@ export class KnowledgeGraphRepository extends BaseRepository {
     }
 
     const docSpread = sql<number>`COALESCE(array_length(${kgEntities.documentIds}, 1), 1)`;
-    const rows = await this.db
+    const rows = await this.readDb
       .select({
         id: kgEntities.id,
         entityName: kgEntities.entityName,
@@ -580,7 +625,7 @@ export class KnowledgeGraphRepository extends BaseRepository {
     const unique = [...new Set(canonicalNames.filter(Boolean))];
     if (unique.length === 0) return out;
 
-    const rows = await this.db
+    const rows = await this.readDb
       .select({
         aliasCanonical: kgEntityAliases.aliasCanonical,
         targetCanonical: kgEntityAliases.targetCanonical,
@@ -607,7 +652,7 @@ export class KnowledgeGraphRepository extends BaseRepository {
     if (!canonicalName || canonicalName.length < 4) return [];
 
     const sim = sql<number>`similarity(${kgEntities.canonicalName}, ${canonicalName})`;
-    const rows = await this.db
+    const rows = await this.readDb
       .select({
         canonicalName: kgEntities.canonicalName,
         entityName: kgEntities.entityName,
@@ -696,7 +741,7 @@ export class KnowledgeGraphRepository extends BaseRepository {
         conditions.push(sql`${kgRelations.documentIds} && ${uuidArraySql(documentIds)}`);
       }
 
-      const rows = await this.db
+      const rows = await this.readDb
         .select({
           sourceCanonical: kgRelations.sourceCanonical,
           targetCanonical: kgRelations.targetCanonical,
@@ -741,7 +786,7 @@ export class KnowledgeGraphRepository extends BaseRepository {
       entityConditions.push(sql`${kgEntities.documentIds} && ${uuidArraySql(documentIds)}`);
     }
 
-    const entityRows = await this.db
+    const entityRows = await this.readDb
       .select({
         canonicalName: kgEntities.canonicalName,
         sourceChunkIds: kgEntities.sourceChunkIds,
@@ -759,7 +804,7 @@ export class KnowledgeGraphRepository extends BaseRepository {
 
   async getDocumentKgHash(orgId: string, documentId: string): Promise<string | null> {
     this.requireTenant(orgId);
-    const rows = await this.db
+    const rows = await this.readDb
       .select({ kgIndexedHash: documents.kgIndexedHash })
       .from(documents)
       .where(and(eq(documents.orgId, orgId), eq(documents.id, documentId)))
@@ -985,7 +1030,7 @@ export class KnowledgeGraphRepository extends BaseRepository {
 
   async getLlmCache(orgId: string, cacheKey: string): Promise<string | null> {
     this.requireTenant(orgId);
-    const rows = await this.db
+    const rows = await this.readDb
       .select({ responseText: llmCache.responseText })
       .from(llmCache)
       .where(and(eq(llmCache.orgId, orgId), eq(llmCache.cacheKey, cacheKey)))

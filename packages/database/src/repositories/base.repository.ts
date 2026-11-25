@@ -1,7 +1,10 @@
-import { db } from '../client.js';
+import { db, readDb } from '../client.js';
 
 export abstract class BaseRepository {
+  /** Primary read/write Drizzle client. */
   protected readonly db = db;
+  /** Read-replica Drizzle client (aliases primary `db` when `DATABASE_READ_URL` is unset). */
+  protected readonly readDb = readDb;
 
   /**
    * Base constructor
