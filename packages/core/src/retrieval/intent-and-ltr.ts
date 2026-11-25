@@ -536,9 +536,12 @@ export function selectDiverseNonDuplicateCandidates<T extends DiverseSelectCandi
 }
 
 /**
- * Two-tier confidence-gated Adaptive Top-K sizing based on query intent and top-candidate margin.
- * Trims unambiguous single-document lookups to 2-3 chunks (saving 40-60% prompt tokens)
- * while preserving full recall width whenever multiple documents score closely or on multi-hop/global intents.
+ * Scale-Invariant Adaptive Top-K sizing with Relative Score-Ratio Tail Pruning.
+ * Combines two complementary principles without any corpus-specific tuning:
+ *   1. Confidence-gated trimming on unambiguous single-document lookups (`exact_lookup`, `factual`, `temporal_policy`).
+ *   2. Scale-invariant relative elbow pruning: beyond a safe intent-specific `minK`, drops flat
+ *      background-noise tail chunks whose calibrated LTR score falls sharply below `top1`.
+ * Preserves full recall whenever multiple documents cluster closely near `top1` (multi-hop, global synthesis).
  */
 export function computeAdaptiveTopK(
   intent: QueryIntent,
@@ -547,31 +550,56 @@ export function computeAdaptiveTopK(
   hasExactCodeMatch: boolean,
 ): number {
   const safeBase = Math.max(2, baseLimit);
-  if (intent === 'global_synthesis' || intent === 'comparative_complex' || intent === 'local_multihop') {
-    return safeBase;
-  }
   const top1 = topScores[0] ?? 0;
+  if (top1 <= 0 || topScores.length < 2) return safeBase;
+
   const top2 = topScores[1] ?? 0;
   const gap12 = top1 - top2;
 
-  // Tier 1: Ultra-confident unambiguous single-document winner -> keep winner + 1 safety/contrast chunk
-  if (hasExactCodeMatch && top1 >= 0.70 && gap12 >= 0.12) {
-    return Math.min(safeBase, 2);
-  }
-  if (intent === 'factual' && top1 >= 0.74 && gap12 >= 0.12) {
-    return Math.min(safeBase, 2);
+  // 1. Confidence-gated trimming for single-document intents
+  if (intent === 'exact_lookup' || intent === 'factual' || intent === 'temporal_policy') {
+    if (hasExactCodeMatch && top1 >= 0.70 && gap12 >= 0.12) {
+      return Math.min(safeBase, 2);
+    }
+    if (intent === 'factual' && top1 >= 0.74 && gap12 >= 0.12) {
+      return Math.min(safeBase, 2);
+    }
+    if (hasExactCodeMatch && top1 >= 0.65 && gap12 >= 0.08) {
+      return Math.min(safeBase, 3);
+    }
+    if (intent === 'factual' && top1 >= 0.72 && gap12 >= 0.08) {
+      return Math.min(safeBase, 3);
+    }
+    if (intent === 'temporal_policy' && top1 >= 0.74 && gap12 >= 0.12) {
+      return Math.min(safeBase, 3);
+    }
   }
 
-  // Tier 2: Confident single-document lookup -> trim low-signal tail to 3 chunks
-  if (hasExactCodeMatch && top1 >= 0.65 && gap12 >= 0.08) {
-    return Math.min(safeBase, 3);
+  // 2. Scale-invariant relative score-ratio elbow pruning (works across all intents & score scales)
+  // On code-anchored multi-hop queries, hop-1 receives an exact-code LTR bonus that hop-2
+  // structurally does not, creating an artificial gap above hop-2 bridge evidence — keep full baseLimit.
+  if (hasExactCodeMatch && (intent === 'local_multihop' || intent === 'comparative_complex')) {
+    return safeBase;
   }
-  if (intent === 'factual' && top1 >= 0.72 && gap12 >= 0.08) {
-    return Math.min(safeBase, 3);
+
+  const minK = intent === 'global_synthesis' ? 4 : 2;
+  const relativeFloor =
+    intent === 'exact_lookup' || intent === 'factual'
+      ? 0.72
+      : intent === 'temporal_policy'
+        ? 0.70
+        : intent === 'global_synthesis'
+          ? 0.60
+          : 0.66; // local_multihop & comparative_complex
+
+  const threshold = top1 * relativeFloor;
+  const checkLimit = Math.min(safeBase, topScores.length);
+  for (let i = minK; i < checkLimit; i++) {
+    if ((topScores[i] ?? 0) < threshold) {
+      return i;
+    }
   }
-  if (intent === 'temporal_policy' && top1 >= 0.74 && gap12 >= 0.12) {
-    return Math.min(safeBase, 3);
-  }
+
   return safeBase;
 }
 
