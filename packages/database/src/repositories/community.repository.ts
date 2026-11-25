@@ -1,7 +1,16 @@
 import { BaseRepository } from './base.repository.js';
 import { kgCommunities } from '../schema/communities.js';
 import { kgEntities, kgRelations } from '../schema/knowledge-graph.js';
-import { and, desc, eq, gte, sql } from 'drizzle-orm';
+import { HNSW_EF_SEARCH_DEFAULT, withHnswSearch } from '../client.js';
+import { and, desc, eq, sql } from 'drizzle-orm';
+
+function extractRows<T extends Record<string, unknown>>(res: unknown): T[] {
+  if (Array.isArray(res)) return res as T[];
+  if (res && typeof res === 'object' && 'rows' in res && Array.isArray((res as { rows: unknown[] }).rows)) {
+    return (res as { rows: T[] }).rows;
+  }
+  return [];
+}
 
 export interface UpsertCommunityInput {
   level: number;
@@ -22,7 +31,7 @@ export class CommunityRepository extends BaseRepository {
 
   async getExistingCommunityHashes(orgId: string, level = 0): Promise<Map<string, string>> {
     this.requireTenant(orgId);
-    const rows = await this.db
+    const rows = await this.readDb
       .select({
         clusterKey: kgCommunities.clusterKey,
         clusterHash: kgCommunities.clusterHash,
@@ -35,7 +44,7 @@ export class CommunityRepository extends BaseRepository {
   async loadGraphForClustering(orgId: string, limitEntities = 2000, limitRelations = 6000) {
     this.requireTenant(orgId);
     const [entities, relations] = await Promise.all([
-      this.db
+      this.readDb
         .select({
           canonicalName: kgEntities.canonicalName,
           entityName: kgEntities.entityName,
@@ -47,7 +56,7 @@ export class CommunityRepository extends BaseRepository {
         .where(eq(kgEntities.orgId, orgId))
         .orderBy(desc(kgEntities.degree))
         .limit(limitEntities),
-      this.db
+      this.readDb
         .select({
           sourceCanonical: kgRelations.sourceCanonical,
           targetCanonical: kgRelations.targetCanonical,
@@ -114,32 +123,47 @@ export class CommunityRepository extends BaseRepository {
     documentIds?: string[],
   ) {
     this.requireTenant(orgId);
-    const similarity = sql<number>`1 - (${kgCommunities.embedding} <=> ${JSON.stringify(embedding)}::vector)`;
-    const conditions = [
-      eq(kgCommunities.orgId, orgId),
-      sql`${kgCommunities.embedding} IS NOT NULL`,
-      gte(similarity, minSimilarity),
-    ];
+    const vecLiteral = JSON.stringify(embedding);
+    const maxDistance = Math.max(0, Math.min(2, 1 - minSimilarity));
+    const overfetch = Math.min(Math.max(limit * 4, 24), 120);
+    const efSearch = Math.max(HNSW_EF_SEARCH_DEFAULT, overfetch);
 
-    if (documentIds && documentIds.length > 0) {
-      const allowedArr = sql`ARRAY[${sql.join(documentIds.map((id) => sql`${id}::uuid`), sql`, `)}]::uuid[]`;
-      conditions.push(sql`${kgCommunities.documentIds} <@ ${allowedArr}`);
-    }
+    const aclSql =
+      documentIds && documentIds.length > 0
+        ? sql`AND document_ids <@ ARRAY[${sql.join(documentIds.map((id) => sql`${id}::uuid`), sql`, `)}]::uuid[]`
+        : sql``;
 
-    const rows = await this.db
-      .select({
-        id: kgCommunities.id,
-        level: kgCommunities.level,
-        title: kgCommunities.title,
-        summary: kgCommunities.summary,
-        documentIds: kgCommunities.documentIds,
-        similarity,
-      })
-      .from(kgCommunities)
-      .where(and(...conditions))
-      .orderBy(desc(similarity))
-      .limit(limit);
+    const rows = await withHnswSearch(this.readDb, efSearch, async (tx) => {
+      const res = await tx.execute(sql`
+        WITH hnsw_candidates AS (
+          SELECT
+            id, level, title, summary, document_ids,
+            (embedding <=> ${vecLiteral}::vector) AS distance
+          FROM kg_communities
+          WHERE org_id = ${orgId}::uuid
+            AND embedding IS NOT NULL
+            ${aclSql}
+          ORDER BY embedding <=> ${vecLiteral}::vector ASC
+          LIMIT ${overfetch}
+        )
+        SELECT
+          id, level, title, summary, document_ids,
+          (1.0 - distance)::float8 AS similarity
+        FROM hnsw_candidates
+        WHERE distance <= ${maxDistance}
+        ORDER BY distance ASC
+        LIMIT ${limit}
+      `);
+      return extractRows<Record<string, unknown>>(res);
+    });
 
-    return rows.map((r) => ({ ...r, similarity: Number(r.similarity) }));
+    return rows.map((r) => ({
+      id: String(r.id),
+      level: Number(r.level),
+      title: String(r.title),
+      summary: String(r.summary),
+      documentIds: Array.isArray(r.document_ids) ? (r.document_ids as string[]) : [],
+      similarity: Number(r.similarity),
+    }));
   }
 }

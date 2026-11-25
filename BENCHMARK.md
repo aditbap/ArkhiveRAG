@@ -15,8 +15,8 @@ This document reports reproducible, evidence-backed benchmark results for **Corp
 | **Error-Driven, 4-Track & V2.5 Score-Ratio Pruning Lift (V2.0 → V2.5)** *(0 extra LLM calls)* | Lifted `auto`+LTR NDCG@5 **`0.8927 → 0.9482`** / MRR **`0.9306 → 1.0000`** while slashing context tokens **`2,014 → 569` (−71.7%)** & **3.51×'ing `Quality / 1k Tokens` (`0.475 → 1.666`)**; lifted KG-only `local` FullRec@5 **`0.6319 → 0.7569` (+12.50 pts)** & NDCG@5 **`0.5981 → 0.7404` (+14.23 pts)** while cutting `local` tokens **`1,975 → 607` (−69.3%)** with **0.0000 quality loss** |
 | **Live PostgreSQL + Cloudflare BGE-M3 vs. LightRAG v1.5.8** | Outperformed LightRAG across every mode (`mix`: **`0.9630` vs. `0.9259`**, `local`: **`0.9630` vs. `0.8148`**) with **−46% to −52% fewer context tokens** and **−46.4% lower cost/query** (`$0.93` vs. `$1.73` per 1k queries; V2.4 grounded bridge-first KG compression cuts KG-heavy prompt tokens by a further ~64%) |
 | **54-Query Golden Enterprise Suite** *(real Postgres + 1024-dim live embeddings)* | **`0.9935` Full-Recall@5**, **`0.9706` MRR**, **`931` avg context tokens**, **`36/36` (100%) live citation integrity** |
-| **10,000-Document Postgres Scale** | **`69.4 ms` HNSW p50**, **`1.8 ms` 2-hop PPR p50**, **`222.3 MiB` Postgres RAM**, **`0.00%` error rate** across `10 / 25 / 50` concurrent VUs (+ migration `0014` stored `content_tsv` GIN & `DATABASE_POOL_MAX=25`) |
-| **Enterprise Security, Governance & Reliability** | **`8/8` RBAC**, **`0` tenant leaks**, **`0` doc-ACL leaks** (PPR + RAPTOR `<@` + ACL-versioned cache revocation), **`6/6` (100%) live prompt-injection blocked**, governance approval workflow (`PATCH /documents/:id/governance`), contradiction detection, post-generation citation validation, & calibrated answer confidence (`61/61` unit tests) |
+| **10,000 → 100,000-Document Postgres + PgBouncer Scale (V2.7)** | **`100k` docs:** **`7.93 ms` HNSW p50** (**44.9× faster** vs V2.6), **`17.01 ms` composite GIN FTS p50** (**15.5× faster**), **`14.74 ms` Hybrid p50** (**36.9× faster**), **`5.54 ms` 2-hop PPR p50**, **`165.1 req/s` @ `500` VUs** (**68.8× throughput**, **73.8× lower p50**) with **`0 / 970` errors**; **PgBouncer (`:6432`) transaction mode** hits **`249.6 req/s` @ `500` VUs** (`0` prepared-statement errors) |
+| **Enterprise Security, Governance & Reliability** | **`8/8` RBAC**, **`0` tenant leaks**, **`0` doc-ACL leaks** (40 concurrent mixed-tenant queries through PgBouncer + PPR + RAPTOR `<@` + ACL-versioned cache revocation), **`6/6` (100%) live prompt-injection blocked**, governance approval workflow (`PATCH /documents/:id/governance`), contradiction detection, post-generation citation validation, & calibrated answer confidence (`73/73` unit tests) |
 
 ---
 
@@ -122,17 +122,29 @@ Measured on real PostgreSQL 16 + `pgvector` HNSW + Cloudflare `@cf/baai/bge-m3` 
 - **Corporate RAG V2 (`auto`, `2,257` avg tokens):** **`$0.93` per 1,000 queries**
 - **`HKUDS/LightRAG` v1.5.8 (`mix`, `4,701` avg tokens):** **`$1.73` per 1,000 queries** (**46.4% cost reduction**)
 
-### 2.2 Scalability (`10,000 → 50,000 → 100,000` Real 1024-Dim Documents in PostgreSQL, Post-`0014`)
+### 2.2 Scalability & Concurrency (`10,000 → 50,000 → 100,000` Real 1024-Dim Documents, V2.7 vs. V2.6)
 
-Measured on single-node Docker PostgreSQL 15.20 (`shared_buffers=128MB`, `work_mem=4MB`, `DATABASE_POOL_MAX=25`) with 1024-dim normalized vectors and migration `0014` stored `content_tsv` GIN (`scripts/ops/bench-scale-load.mts`):
+Measured on single-node Docker PostgreSQL 15.20 + `pgvector 0.8.7` (`infra/deploy/postgresql.conf`: `shared_buffers=512MB`, `work_mem=32MB`, `random_page_cost=1.1`, `shm_size=1g`, Migration `0015` tenant-scoped composite `btree_gin` + partial HNSW `ORDER BY embedding <=> vec ASC` + lean non-embedding projections):
 
-| Corpus Scale | Insert Throughput | Dense HNSW `p50 / p95 / p99` | Stored `content_tsv` FTS (`0014`) `p50 / p95 / p99` | Hybrid RRF `p50 / p95 / p99` | 2-Hop PPR `p50` | Table + Index Size | Postgres RAM |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **10,000 docs** | `140.6 docs/s` | **`46.7 / 52.5 / 54.9 ms`** | **`30.8 / 84.7 / 85.5 ms`** *(**18.5× faster** than pre-`0014`)* | **`51.2 / 87.4 / 87.9 ms`** *(**11.3× faster** than pre-`0014`)* | **`7.0 ms`** | `160.6 MB` | `227.8 MiB` |
-| **50,000 docs** | `66.1 docs/s` | `163.5 / 253.8 / 300.3 ms` | `204.9 / 396.0 / 396.0 ms` | `385.2 / 597.3 / 607.5 ms` | **`10.7 ms`** | `747.7 MB` | `320.1 MiB` |
-| **100,000 docs** | `34.1 docs/s` | `356.4 / 929.7 / 929.7 ms` | `263.1 / 381.8 / 416.0 ms` | `544.5 / 878.5 / 935.7 ms` | **`11.1 ms`** | `1,475.6 MB` | `270.0 MiB` |
+| Corpus Scale | Insert Throughput | Dense HNSW `p50 / p95 / p99` | Composite GIN FTS (`0015`) `p50 / p95 / p99` | Hybrid RRF `p50 / p95 / p99` | 2-Hop PPR `p50` | Disk Size |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **10,000 docs (V2.7)** | **`167.3 docs/s`** *(+19%)* | **`4.84 / 6.27 / 6.48 ms`** *(**9.6× faster**)* | **`7.08 / 9.00 / 10.04 ms`** *(**4.4× faster**)* | **`7.42 / 10.46 / 12.11 ms`** *(**6.9× faster**)* | **`5.31 ms`** | `149.1 MB`\* |
+| **50,000 docs (V2.7)** | **`97.0 docs/s`** *(+47%)* | **`6.58 / 21.24 / 23.07 ms`** *(**24.8× faster**)* | **`9.43 / 12.19 / 18.26 ms`** *(**21.7× faster**)* | **`9.43 / 11.44 / 11.53 ms`** *(**40.8× faster**)* | **`5.34 ms`** | `748.6 MB` |
+| **100,000 docs (V2.7)** | **`49.5 docs/s`** *(+45%)* | **`7.93 / 41.75 / 44.46 ms`** *(**44.9× faster**)* | **`17.01 / 23.80 / 26.52 ms`** *(**15.5× faster**)* | **`14.74 / 26.09 / 26.16 ms`** *(**36.9× faster**)* | **`5.54 ms`** | `1,449.6 MB` |
+| *100,000 docs (V2.6 baseline)* | *`34.1 docs/s`* | *`356.4 / 929.7 / 929.7 ms`* | *`263.1 / 381.8 / 416.0 ms`* | *`544.5 / 878.5 / 935.7 ms`* | *`11.1 ms`* | *`1,475.6 MB`* |
 
-> \* **Capacity & Sizing Note:** At `100,000` docs (`1.48 GB` table+index), `0 / 970` requests errored across `10 / 50 / 100 / 250 / 500` concurrent VUs and mixed `50` readers + `10×2` transactional writers (`0` duplicate chunks). Because default Docker `shared_buffers=128MB` forces disk I/O thrashing once HNSW exceeds 128 MB, production deployments at `50k–100k` docs should provision `shared_buffers = 2GB–4GB`, `effective_cache_size = 6GB–12GB`, `work_mem = 32MB`, and PgBouncer/read replicas for `>100` concurrent VUs.
+**High-Concurrency Stress @ `100,000` Documents (`0 / 970` Errors, V2.6 → V2.7) & PgBouncer (`:6432`) Multiplexing:**
+
+| Workload | V2.6 Throughput | **V2.7 Direct (`100k` docs)** | **Speedup (V2.6 → V2.7)** | **V2.7 PgBouncer (`:6432`, `10k` docs)** |
+| :--- | :---: | :---: | :---: | :---: |
+| **`10` VUs** | `1.7 req/s` (`5.64 s` p50) | **`28.0 req/s` (`339.3 ms` p50)** | **16.5× throughput · 16.6× lower p50** | **`45.4 req/s` (`209.1 ms` p50)** |
+| **`50` VUs** | `1.9 req/s` (`23.11 s` p50) | **`105.6 req/s` (`414.8 ms` p50)** | **55.6× throughput · 55.7× lower p50** | **`109.3 req/s` (`417.2 ms` p50)** |
+| **`100` VUs** | `2.2 req/s` (`36.31 s` p50) | **`147.5 req/s` (`540.6 ms` p50)** | **67.0× throughput · 67.2× lower p50** | **`229.3 req/s` (`356.3 ms` p50)** |
+| **`250` VUs** | `1.8 req/s` (`117.53 s` p50) | **`147.0 req/s` (`1.30 s` p50)** | **81.7× throughput · 90.2× lower p50** | **`219.6 req/s` (`838.8 ms` p50)** |
+| **`500` VUs** | `2.4 req/s` (`164.69 s` p50) | **`165.1 req/s` (`2.23 s` p50)** | **68.8× throughput · 73.8× lower p50** | **`249.6 req/s` (`1.45 s` p50)** |
+| **Mixed (`50` Readers + `10×2` Writers)** | Readers `25.5 s` · Writers `21.2 s` | **Readers `560.6 ms` · Writers `1.02 s`** (`0` dups) | **45.5× faster readers · 20.8× faster writers** | **Readers `300.8 ms` · Writers `397.9 ms`** (`0` dups) |
+
+> \* **Automated Plan Regression & Maintenance Note:** `scripts/ops/verify-query-plans.mts` enforces `EXPLAIN (ANALYZE, BUFFERS)` verification (`0.50 ms` `Index Scan[idx_chunks_embedding_hnsw]`, `5.57 ms` `Bitmap Index Scan[idx_chunks_org_content_tsv_gin]`) and fails CI/ops checks on any `Seq Scan` regression or `embedding` over-fetch. After bulk org deletion (>30% churn), schedule `REINDEX INDEX CONCURRENTLY idx_chunks_embedding_hnsw` to compact HNSW tombstones.
 
 ### 2.3 Golden Quality, Chaos Resilience, Security & Backup Verification (V2.6)
 
