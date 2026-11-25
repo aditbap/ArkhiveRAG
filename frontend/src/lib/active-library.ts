@@ -33,7 +33,7 @@ export function setActiveLibraryId(id: string | null) {
 }
 
 /**
- * Every call the dashboard makes to apps/api goes through the global `fetch`.
+ * Every call the dashboard makes to backend/api goes through the global `fetch`.
  * Rather than threading the selected library through each call site, patch
  * `fetch` once so requests to the API carry `X-Org-Id` for the active library.
  * The API treats the header as a request only and checks membership server-side,
@@ -126,7 +126,7 @@ let accessPromise: Promise<{ libraries: Library[]; userId: string }> | null = nu
 
 /**
  * The caller's role in the active library, for hiding actions they can't perform.
- * This is only UX — apps/api enforces the same rules (see packages/auth/src/rbac.ts) and
+ * This is only UX — backend/api enforces the same rules (see packages/auth/src/rbac.ts) and
  * returns 403 regardless of what the UI shows.
  */
 export function useLibraryAccess(): LibraryAccess {
@@ -162,7 +162,7 @@ export function useLibraryAccess(): LibraryAccess {
   }
 }
 
-/** Best-effort message from an apps/api error response ({ error: { message } }). */
+/** Best-effort message from an backend/api error response ({ error: { message } }). */
 export async function readApiError(res: Response, fallback: string): Promise<string> {
   const body = await res.json().catch(() => null)
   return body?.error?.message ?? fallback

@@ -5,7 +5,7 @@ All notable changes to **ArkhiveRAG** are documented in this file.
 ## [v3.1.0] - 2026-11-25 — RBAC-Enforced Agentic RAG & Evaluation
 
 ### Added
-- **Zero-Trust Agent Policy Guard & Bounded Orchestrator (`packages/core/src/agent`, `apps/api/src/lib/company-agent.ts`):**
+- **Zero-Trust Agent Policy Guard & Bounded Orchestrator (`packages/core/src/agent`, `backend/api/src/lib/company-agent.ts`):**
   - Deterministic `authorizeToolCall`, `detectOutOfAuthorityRequest`, and bounded (`<= 3` steps) `planAgentToolsDeterministic` deciding when to search active/draft documents, query read-only database tools, combine both, answer directly, or fail-closed refuse unauthorized, cross-tenant, raw-SQL, secret-exfiltration, or write probes.
 - **Allowlisted Read-Only PostgreSQL Agent Tools (`AgentToolsRepository`):**
   - Parameterized, strictly tenant-scoped read-only queries on `readDb`: `query_document_inventory`, `query_governance_audit`, `query_workspace_members`, `query_ingestion_jobs`, and owner-only `query_security_audit_logs`, with persistent `audit_logs` allow/deny recording.
@@ -13,7 +13,7 @@ All notable changes to **ArkhiveRAG** are documented in this file.
   - Added `GET /api/v1/agent/tools`, `POST /api/v1/agent/query`, `GET /api/v1/agent/audit` (`owner` only), and optional `agentic: true` (role-isolated cache) on `POST /api/v1/chat/completions`.
   - Added Prometheus `rag_agent_tool_calls_total`, `rag_agent_policy_denials_total`, `rag_agent_steps_count`, `RagAgentPolicyDenialSpike` alert, and Grafana Agentic panel.
 - **Automated RBAC Agent Evaluation (`pnpm ops:eval-agent`):**
-  - Added `evaluateAgentSuite` + live 24-case multi-role/adversarial Postgres evaluation (`scripts/ops/eval-agentic-rag.mts`) + `apps/api/test/unit/v31-agentic-rag.test.ts`, wired into `.github/workflows/integration.yml`.
+  - Added `evaluateAgentSuite` + live 24-case multi-role/adversarial Postgres evaluation (`scripts/ops/eval-agentic-rag.mts`) + `backend/api/test/unit/v31-agentic-rag.test.ts`, wired into `.github/workflows/integration.yml`.
 
 ## [v3.0.0] - 2026-11-25
 
@@ -21,10 +21,10 @@ All notable changes to **ArkhiveRAG** are documented in this file.
 - **Observability & Alerting:** Added 9 Prometheus SLO/health alert rules in `infra/deploy/alerts.yml` (verified via `promtool`), `rag-worker` (`:9092/metrics`) scraping in `infra/deploy/prometheus.yml`, fixed local dev API scrape port (`:3002`), and pre-provisioned Grafana dashboard `ArkhiveRAG V3.0 Overview`.
 - **Operations & CI Gates:** Added repeatable `scripts/ops/verify-resilience.mts` (`pnpm ops:verify-resilience`) and `pnpm ops:verify-plans` (`scripts/ops/verify-query-plans.mts`), and wired both into `.github/workflows/integration.yml`.
 - **Complete Documentation Suite:** Added `docs/ARCHITECTURE.md`, `docs/API.md`, `docs/openapi.yaml` (OpenAPI 3.1.0), `docs/DEPLOYMENT.md`, and `docs/OPERATIONS.md`.
-- **Open-Source Community Files:** Added `CHANGELOG.md`, `CODE_OF_CONDUCT.md`, `.github/PULL_REQUEST_TEMPLATE.md`, and GitHub issue templates.
+- **Open-Source Community Files:** Added `docs/CHANGELOG.md`, `.github/CODE_OF_CONDUCT.md`, `.github/PULL_REQUEST_TEMPLATE.md`, and GitHub issue templates.
 
 ### Fixed
-- Aligned `infra/docker/docker-compose.deploy.yml` and `.env.production.example` to `vector(1024)` (`EMBEDDING_DIMENSIONS=1024`, `@cf/baai/bge-m3`), added reproducible `IMAGE_TAG` pinning, added worker HTTP `/health` check (`:9092`), and fixed `:3001 → :3002` port references in `infra/deploy/ROLLBACK.md`.
+- Aligned `infra/docker/docker-compose.deploy.yml` and `.env.production.example` to `vector(1024)` (`EMBEDDING_DIMENSIONS=1024`, `@cf/baai/bge-m3`), added reproducible `IMAGE_TAG` pinning, added worker HTTP `/health` check (`:9092`), and fixed `:3001 → :3002` port references in `docs/ROLLBACK.md`.
 
 ## [v2.7.0] - 2026-11-25 — Database Performance & Concurrency
 
@@ -39,7 +39,7 @@ All notable changes to **ArkhiveRAG** are documented in this file.
 
 - Split fast fail-open HTTP cache Redis (`commandTimeout: 500ms`, `enableOfflineQueue: false`) from BullMQ blocking queue connection with exponential retries (`attempts: 3`).
 - Added single-transaction `ChunkRepository.replaceVersionChunks` (`0` duplicate chunks across worker `SIGKILL` crashes), startup stale-job reconciler, and `statement_timeout` bounds.
-- Added `X-Request-Id` + W3C `traceparent` propagation, `rag_db_pool_connections`, `rag_redis_degraded_total`, zero-dependency worker `:9092` observability server, `scripts/ops/backup.sh`, `scripts/ops/restore.sh`, and `infra/deploy/ROLLBACK.md`.
+- Added `X-Request-Id` + W3C `traceparent` propagation, `rag_db_pool_connections`, `rag_redis_degraded_total`, zero-dependency worker `:9092` observability server, `scripts/ops/backup.sh`, `scripts/ops/restore.sh`, and `docs/ROLLBACK.md`.
 - Passed all 5 live Docker chaos & multi-tenant security drills plus `10k → 100k` load stress (`0 / 970` errors).
 
 ## [v2.5.0] - 2026-11-24 — Retrieval Accuracy & Token Optimization

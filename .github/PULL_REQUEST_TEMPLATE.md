@@ -14,4 +14,4 @@ Describe the change, motivation, and any architectural or migration impact.
 - [ ] `pnpm typecheck && pnpm lint && pnpm test:unit && pnpm build` pass locally
 - [ ] If touching queries/indexes/Docker: `pnpm ops:verify-plans` & `pnpm ops:verify-resilience` pass
 - [ ] No secrets, `.env` values, or machine-specific paths committed
-- [ ] Documentation / `CHANGELOG.md` updated if public behavior or config changed
+- [ ] Documentation / `docs/CHANGELOG.md` updated if public behavior or config changed

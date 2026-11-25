@@ -12,7 +12,7 @@ graphify-out
 .env.*
 !.env.example
 **/.env.local
-apps/web/.env*
+frontend/.env*
 docs
 examples
 infra/docker/grafana

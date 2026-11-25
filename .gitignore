@@ -70,15 +70,7 @@ update-*.js
 update-*.ts
 *.md
 !README.md
-!BENCHMARK.md
-!infra/deploy/ROLLBACK.md
-!infra/deploy/DOKPLOY.md
-!CHANGELOG.md
-!CODE_OF_CONDUCT.md
-!CONTRIBUTING.md
-!SECURITY.md
 !docs/**/*.md
-!examples/**/*.md
 !.github/**/*.md
 
 # Uploads / Data
@@ -89,5 +81,5 @@ uploads/
 # Local env backups (contain real credentials)
 .env*.bak*
 *.bak-pre-local
-apps/api/api_log.txt
-apps/api/api_pid.txt
+backend/api/api_log.txt
+backend/api/api_pid.txt

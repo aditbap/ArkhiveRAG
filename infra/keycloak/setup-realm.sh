@@ -22,7 +22,7 @@ WEB_URL="${WEB_URL:-http://localhost:3000}"
 PUBLIC_URL="${KEYCLOAK_PUBLIC_URL:-http://localhost:8180}"
 ADMIN_USER="${KEYCLOAK_ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-admin}"
-ENV_FILE="${ENV_FILE:-$ROOT/apps/web/.env.local}"
+ENV_FILE="${ENV_FILE:-$ROOT/frontend/.env.local}"
 DEV_USER=0
 [[ "${1:-}" == "--dev-user" ]] && DEV_USER=1
 

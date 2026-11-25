@@ -1,6 +1,6 @@
 # Production Deploy (Single Server, Docker Compose)
 
-> Using Dokploy? See [DOKPLOY.md](DOKPLOY.md). For full architecture, database tuning, and sizing details see [docs/DEPLOYMENT.md](../../docs/DEPLOYMENT.md) and [ROLLBACK.md](ROLLBACK.md).
+> Using Dokploy? See [DOKPLOY.md](DOKPLOY.md). For full architecture, database tuning, and sizing details see [DEPLOYMENT.md](DEPLOYMENT.md) and [ROLLBACK.md](ROLLBACK.md).
 
 Stack: Caddy (auto-HTTPS) → `web` / `api` / `keycloak`; `pgbouncer` (transaction pooling) → tuned `postgres` (`pgvector` + `infra/deploy/postgresql.conf`), `redis`, `minio`, `ocr`, `clamav`, `prometheus` (with `alerts.yml`), and `grafana` (SSH tunnel `127.0.0.1:3003` only) stay internal.
 

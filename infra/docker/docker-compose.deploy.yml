@@ -171,9 +171,7 @@ services:
     image: ${IMAGE_PREFIX:-arkhiverag}-api:${IMAGE_TAG:-latest}
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.node
-      args:
-        APP: api
+      dockerfile: backend/api/Dockerfile
     command: ["node", "node_modules/@rag/database/dist/migrate.js"]
     restart: "no"
     environment:
@@ -186,9 +184,7 @@ services:
     image: ${IMAGE_PREFIX:-arkhiverag}-api:${IMAGE_TAG:-latest}
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.node
-      args:
-        APP: api
+      dockerfile: backend/api/Dockerfile
     restart: unless-stopped
     environment:
       <<: *app-env
@@ -228,9 +224,7 @@ services:
     image: ${IMAGE_PREFIX:-arkhiverag}-worker:${IMAGE_TAG:-latest}
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.node
-      args:
-        APP: worker
+      dockerfile: backend/worker/Dockerfile
     restart: unless-stopped
     environment:
       <<: *app-env
@@ -261,7 +255,7 @@ services:
     image: ${IMAGE_PREFIX:-arkhiverag}-web:${IMAGE_TAG:-latest}
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.web
+      dockerfile: frontend/Dockerfile
       args:
         NEXT_PUBLIC_API_URL: https://${API_DOMAIN}/api/v1
     restart: unless-stopped

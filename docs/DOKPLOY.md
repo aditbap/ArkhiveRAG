@@ -1,8 +1,8 @@
 # Dokploy Deployment Guide
 
-Use [docker-compose.dokploy.yml](../docker/docker-compose.dokploy.yml) when deploying onto a [Dokploy](https://dokploy.com/) host where Dokploy's Traefik reverse proxy (or a Cloudflare Tunnel sidecar) terminates TLS instead of the standalone `caddy` service in [docker-compose.deploy.yml](../docker/docker-compose.deploy.yml).
+Use [docker-compose.dokploy.yml](../infra/docker/docker-compose.dokploy.yml) when deploying onto a [Dokploy](https://dokploy.com/) host where Dokploy's Traefik reverse proxy (or a Cloudflare Tunnel sidecar) terminates TLS instead of the standalone `caddy` service in [docker-compose.deploy.yml](../infra/docker/docker-compose.deploy.yml).
 
-For full sizing, BYOK configuration, PgBouncer pooling, and database tuning details, see [docs/DEPLOYMENT.md](../../docs/DEPLOYMENT.md) and [ROLLBACK.md](ROLLBACK.md).
+For full sizing, BYOK configuration, PgBouncer pooling, and database tuning details, see [DEPLOYMENT.md](DEPLOYMENT.md) and [ROLLBACK.md](ROLLBACK.md).
 
 ## 1. Create the Compose App in Dokploy
 
@@ -12,7 +12,7 @@ For full sizing, BYOK configuration, PgBouncer pooling, and database tuning deta
 
 ## 2. Configure Environment Variables
 
-Copy the contents of [.env.production.example](../../.env.production.example) into the Dokploy **Environment** tab and fill in:
+Copy the contents of [.env.production.example](../.env.production.example) into the Dokploy **Environment** tab and fill in:
 
 - Strong random secrets (`openssl rand -hex 24`) for `POSTGRES_PASSWORD`, `MINIO_SECRET_KEY`, `KEYCLOAK_ADMIN_PASSWORD`, `AUTH_SECRET`, and `GRAFANA_ADMIN_PASSWORD`.
 - Public domains: `APP_DOMAIN`, `API_DOMAIN`, and `AUTH_DOMAIN`.

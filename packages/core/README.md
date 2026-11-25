@@ -1,6 +1,6 @@
 # `@rag/core`
 
-Pure, zero-I/O domain algorithms, types, interfaces, and policy logic shared across `apps/api`, `apps/worker`, and `@rag/database`.
+Pure, zero-I/O domain algorithms, types, interfaces, and policy logic shared across `backend/api`, `backend/worker`, and `@rag/database`.
 
 ## Modules
 

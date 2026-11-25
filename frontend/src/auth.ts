@@ -2,13 +2,13 @@ import NextAuth from 'next-auth'
 import Keycloak from 'next-auth/providers/keycloak'
 import type { JWT } from 'next-auth/jwt'
 
-/** Refresh slightly early so a token never expires between our check and apps/api's. */
+/** Refresh slightly early so a token never expires between our check and backend/api's. */
 const EXPIRY_SKEW_MS = 30_000
 
 /**
  * Keycloak access tokens are short-lived (5 minutes by default) but the Auth.js session lasts much
  * longer, so the stored access token must be renewed with the refresh token or every call to
- * apps/api starts failing with 401 once the first token expires.
+ * backend/api starts failing with 401 once the first token expires.
  */
 async function refreshAccessToken(token: JWT): Promise<JWT> {
   try {
@@ -65,7 +65,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   session: { strategy: 'jwt' },
   callbacks: {
     async jwt({ token, account }) {
-      // apps/api verifies the access token locally against the realm's JWKS
+      // backend/api verifies the access token locally against the realm's JWKS
       // (packages/auth/jwt-verify.ts) — it is never sent back to Keycloak for validation.
       if (account) {
         return {

@@ -9,12 +9,12 @@
 ### Multi-Tenant BYOK Enterprise Adaptive RAG & RBAC Company Agent on PostgreSQL + pgvector
 
 [![CI](https://img.shields.io/github/actions/workflow/status/aditbap/rag/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI)](https://github.com/aditbap/rag/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/Release-v3.1.0-00A6CE?style=for-the-badge)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/Release-v3.1.0-00A6CE?style=for-the-badge)](docs/CHANGELOG.md)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5%2F6-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](tsconfig.base.json)
 [![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](.nvmrc)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15%2B%20pgvector-336791?style=for-the-badge&logo=postgresql&logoColor=white)](docs/ARCHITECTURE.md)
-[![Next.js](https://img.shields.io/badge/Next.js-16-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)](apps/web/README.md)
-[![Fastify](https://img.shields.io/badge/Fastify-4-000000?style=for-the-badge&logo=fastify&logoColor=white)](apps/api/README.md)
+[![Next.js](https://img.shields.io/badge/Next.js-16-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)](frontend/README.md)
+[![Fastify](https://img.shields.io/badge/Fastify-4-000000?style=for-the-badge&logo=fastify&logoColor=white)](backend/api/README.md)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](infra/README.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-EAB308?style=for-the-badge)](LICENSE)
 
@@ -46,7 +46,7 @@ Most RAG stacks stop at fixed-size chunking and cosine similarity, forcing teams
 
 ## Verified Benchmarks
 
-In a controlled 5-way head-to-head benchmark ([BENCHMARK.md](BENCHMARK.md)) over identical corpus, `1024`-dim vectors, and extracted Knowledge Graph triples (`306` entity links, `188` triples):
+In a controlled 5-way head-to-head benchmark ([BENCHMARK.md](docs/BENCHMARK.md)) over identical corpus, `1024`-dim vectors, and extracted Knowledge Graph triples (`306` entity links, `188` triples):
 
 | Rank | Engine & Mode | AnyRec@5 | **FullRec@5** | **NDCG@5** | **MRR** | **FactCov** | Avg Tokens | **Quality / 1k Tok** | **Latency p50** |
 | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -57,7 +57,7 @@ In a controlled 5-way head-to-head benchmark ([BENCHMARK.md](BENCHMARK.md)) over
 | **8** | `HKUDS/LightRAG` v1.5.8 (`mix`: KG + Vector) | 1.0000 | 0.8958 | 0.7830 | 0.7812 | 0.9583 | 3,218 | 0.243 | 16.94 ms |
 | **12** | `OSU-NLP-Group/HippoRAG` v2 (`OpenIE + igraph PPR`) | 1.0000 | 0.8750 | 0.7328 | 0.7479 | 0.8958 | 521 | 1.406 | 2.62 ms |
 
-> **Live PostgreSQL Scale (`100,000` 1024-dim documents):** `7.93 ms` HNSW `p50` · `17.01 ms` composite `btree_gin` FTS `p50` · `14.74 ms` Hybrid `p50` · **`165.1 req/s`** direct / **`249.6 req/s`** via PgBouncer (`:6432`) at `500` concurrent VUs (`0 / 970` errors). See [BENCHMARK.md](BENCHMARK.md) for full methodology and reproduction steps.
+> **Live PostgreSQL Scale (`100,000` 1024-dim documents):** `7.93 ms` HNSW `p50` · `17.01 ms` composite `btree_gin` FTS `p50` · `14.74 ms` Hybrid `p50` · **`165.1 req/s`** direct / **`249.6 req/s`** via PgBouncer (`:6432`) at `500` concurrent VUs (`0 / 970` errors). See [BENCHMARK.md](docs/BENCHMARK.md) for full methodology and reproduction steps.
 
 ---
 
@@ -66,15 +66,15 @@ In a controlled 5-way head-to-head benchmark ([BENCHMARK.md](BENCHMARK.md)) over
 ```mermaid
 flowchart LR
     Client["Browser / API Client"] --> Proxy["Caddy / Reverse Proxy (HTTPS)"]
-    Proxy --> Web["apps/web (:3000)\nNext.js 16 + Auth.js"]
-    Proxy --> API["apps/api (:3002)\nFastify + Agent + Retriever"]
+    Proxy --> Web["frontend (:3000)\nNext.js 16 + Auth.js"]
+    Proxy --> API["backend/api (:3002)\nFastify + Agent + Retriever"]
     Proxy --> Keycloak["Keycloak (:8080)\nOIDC Identity"]
 
     API --> Redis["Redis 7\nFail-Open Cache + BullMQ"]
     API --> PgBouncer["PgBouncer (:6432)\nTransaction Pool"]
     API -.->|"DATABASE_READ_URL"| ReadReplica["PostgreSQL Read Replica\n(Optional)"]
 
-    Worker["apps/worker (:9092)\nCrash-Safe Ingestion"] --> Redis
+    Worker["backend/worker (:9092)\nCrash-Safe Ingestion"] --> Redis
     Worker --> PgBouncer
     Worker --> Sidecars["MinIO (S3) · ClamAV · PaddleOCR"]
 
@@ -88,16 +88,16 @@ flowchart LR
 
 | Path | Package / Purpose |
 |---|---|
-| [`apps/api`](apps/api/README.md) | `@rag/api` — Fastify HTTP API, `LightRagRetriever`, V3.1 `CompanyAgentOrchestrator`, `RetrievalLearningEngine`, Prometheus `/metrics` |
-| [`apps/worker`](apps/worker/README.md) | `@rag/worker` — Crash-safe BullMQ ingestion worker, parent-child chunking, KG + entity resolution, `:9092` health/metrics |
-| [`apps/web`](apps/web/README.md) | `web` — Next.js 16 + Auth.js v5 web UI with Keycloak OIDC, adaptive mode selector, and inline citations |
+| [`frontend/`](frontend/README.md) | `web` — Next.js 16 + Auth.js v5 web UI, colocated `Dockerfile`, Keycloak OIDC, adaptive mode selector, inline citations |
+| [`backend/api/`](backend/api/README.md) | `@rag/api` — Fastify HTTP API, `LightRagRetriever`, V3.1 `CompanyAgentOrchestrator`, colocated `Dockerfile`, `/metrics` |
+| [`backend/worker/`](backend/worker/README.md) | `@rag/worker` — Crash-safe BullMQ ingestion worker, KG + entity resolution, colocated `Dockerfile`, `:9092` health/metrics |
 | [`packages/core`](packages/core/README.md) | `@rag/core` — Pure algorithms: PPR, entity/temporal resolution, LTR, CRAG, RAPTOR, `SingleflightGroup`, V3.1 RBAC `agent/` |
 | [`packages/database`](packages/database/README.md) | `@rag/database` — Drizzle ORM schemas, `db` / `readDb` repositories, PgBouncer pooler detection, SQL migrations (`0000`–`0015`) |
 | [`packages/providers`](packages/providers/README.md) | `@rag/providers` — BYOK LLM, `1024`-dim embedding, and reranker adapters, plus MinIO, PaddleOCR, ClamAV, and Langfuse |
 | [`packages/auth`](packages/auth/README.md) | `@rag/auth` — Keycloak RS256 JWKS verification and 4-tier RBAC (`owner`/`admin`/`member`/`viewer`) middleware |
-| [`infra/`](infra/README.md) | Docker Compose stacks (local dev, Caddy + PgBouncer deploy, Dokploy), `postgresql.conf`, alerts, and Grafana provisioning |
+| [`infra/`](infra/README.md) | Docker Compose stacks, PgBouncer, tuned `postgresql.conf`, Caddyfile, Prometheus alerts, Grafana dashboard, Keycloak, OCR |
 | [`scripts/`](scripts/README.md) | Operational verification gates (`ops:*`), scale load benchmarks, SHA-256 backup/restore drills, and dev seed script |
-| [`docs/`](docs/README.md) | Architecture overview, OpenAPI 3.1 + API Reference, Deployment Guide, and Operations Runbook |
+| [`docs/`](docs/README.md) | Architecture overview, OpenAPI 3.1 + API Reference, Deployment/Dokploy/Rollback guides, Benchmarks & Changelog |
 | [`examples/`](examples/README.md) | Runnable CLI walkthrough for adaptive chat and V3.1 RBAC Company Agent queries |
 
 ---
@@ -161,7 +161,7 @@ No model weights or API keys are bundled. Copy `.env.example` to `.env` and conf
 
 ## Quick Start
 
-Requires **Node.js 22+**, **pnpm**, and **Docker**. See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor conventions.
+Requires **Node.js 22+**, **pnpm**, and **Docker**. See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for contributor conventions.
 
 ### 1. Local Development
 
@@ -188,8 +188,8 @@ pnpm ops:eval-agent         # Runs live 24-case RBAC Company Agent & policy refu
 
 ### 3. Single-Server Production Deploy
 
-- **Docker Compose + Caddy (Auto-HTTPS):** Follow [infra/deploy/README.md](infra/deploy/README.md) with [docker-compose.deploy.yml](infra/docker/docker-compose.deploy.yml).
-- **Dokploy (Traefik / Cloudflare Tunnel):** Follow [infra/deploy/DOKPLOY.md](infra/deploy/DOKPLOY.md) with [docker-compose.dokploy.yml](infra/docker/docker-compose.dokploy.yml).
+- **Docker Compose + Caddy (Auto-HTTPS):** Follow [docs/DOCKER_DEPLOY.md](docs/DOCKER_DEPLOY.md) with [docker-compose.deploy.yml](infra/docker/docker-compose.deploy.yml).
+- **Dokploy (Traefik / Cloudflare Tunnel):** Follow [docs/DOKPLOY.md](docs/DOKPLOY.md) with [docker-compose.dokploy.yml](infra/docker/docker-compose.dokploy.yml).
 
 ---
 
@@ -241,10 +241,10 @@ All `/api/v1/*` routes (except `/api/v1/guest/chat`) require a Keycloak OIDC `Au
 - **[Documentation Hub](docs/README.md)** — Organized guide for developers, operators, and SREs
 - **[Architecture Overview](docs/ARCHITECTURE.md)** — Service topology, adaptive retrieval pipeline, database tuning & security model
 - **[API Reference](docs/API.md)** & **[OpenAPI 3.1 Spec](docs/openapi.yaml)** — Auth, RBAC, endpoints, and SSE/JSON schemas
-- **[Deployment Guide](docs/DEPLOYMENT.md)** · **[Docker Compose + Caddy](infra/deploy/README.md)** · **[Dokploy Guide](infra/deploy/DOKPLOY.md)**
-- **[Operations Runbook](docs/OPERATIONS.md)** · **[Rollback Playbook](infra/deploy/ROLLBACK.md)** — SLOs, alert triage, HNSW maintenance & DR drills
-- **[Benchmarks](BENCHMARK.md)** — 5-way head-to-head results & `10k → 100k`-document Postgres/PgBouncer telemetry
-- **[Changelog](CHANGELOG.md)** · **[Contributing](CONTRIBUTING.md)** · **[Code of Conduct](CODE_OF_CONDUCT.md)** · **[Security Policy](SECURITY.md)** · **[License (MIT)](LICENSE)**
+- **[Deployment Guide](docs/DEPLOYMENT.md)** · **[Docker Compose + Caddy](docs/DOCKER_DEPLOY.md)** · **[Dokploy Guide](docs/DOKPLOY.md)**
+- **[Operations Runbook](docs/OPERATIONS.md)** · **[Rollback Playbook](docs/ROLLBACK.md)** — SLOs, alert triage, HNSW maintenance & DR drills
+- **[Benchmarks](docs/BENCHMARK.md)** — 5-way head-to-head results & `10k → 100k`-document Postgres/PgBouncer telemetry
+- **[Changelog](docs/CHANGELOG.md)** · **[Contributing](.github/CONTRIBUTING.md)** · **[Code of Conduct](.github/CODE_OF_CONDUCT.md)** · **[Security Policy](.github/SECURITY.md)** · **[License (MIT)](LICENSE)**
 
 ---
 

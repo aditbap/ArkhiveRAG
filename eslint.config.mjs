@@ -36,9 +36,9 @@ export default [
     // Long-running processes and CLI scripts log to stdout by design; the API's request
     // handlers use the Fastify logger instead, so `no-console` stays on for those.
     files: [
-      "apps/worker/**/*.ts",
-      "apps/api/src/index.ts",
-      "apps/api/src/scripts/**/*.ts",
+      "backend/worker/**/*.ts",
+      "backend/api/src/index.ts",
+      "backend/api/src/scripts/**/*.ts",
       "packages/database/src/migrate.ts",
       "scripts/**/*.ts",
     ],

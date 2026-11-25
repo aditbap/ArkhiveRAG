@@ -36,8 +36,8 @@ import {
   KnowledgeGraphRepository,
   queryClient,
 } from '../../packages/database/dist/index.js';
-import { CompanyAgentOrchestrator } from '../../apps/api/dist/lib/company-agent.js';
-import { LightRagRetriever } from '../../apps/api/dist/lib/lightrag-retriever.js';
+import { CompanyAgentOrchestrator } from '../../backend/api/dist/lib/company-agent.js';
+import { LightRagRetriever } from '../../backend/api/dist/lib/lightrag-retriever.js';
 
 dotenv.config();
 

@@ -1,7 +1,7 @@
 import { getSession, signOut } from 'next-auth/react'
 
 /**
- * Fetches the current Keycloak access token for calling apps/api, or null if
+ * Fetches the current Keycloak access token for calling backend/api, or null if
  * unauthenticated. The token is stored in the Auth.js session (see src/auth.ts).
  */
 export async function getAccessToken(): Promise<string | null> {

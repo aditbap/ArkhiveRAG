@@ -1,10 +1,10 @@
 import type { NextConfig } from "next";
 import path from "path";
 
-const repoRoot = path.resolve(__dirname, "../..");
+const repoRoot = path.resolve(__dirname, "..");
 
 const nextConfig: NextConfig = {
-  // Self-contained server bundle for the Docker image (infra/docker/Dockerfile.web).
+  // Self-contained server bundle for the Docker image (frontend/Dockerfile).
   output: "standalone",
   outputFileTracingRoot: repoRoot,
   turbopack: {

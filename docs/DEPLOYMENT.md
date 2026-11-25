@@ -2,9 +2,9 @@
 
 This guide covers single-server production deployment, PgBouncer pooling, PostgreSQL memory/SSD tuning, forward-only migrations, and capacity sizing.
 
-- Quick Compose reference: [infra/deploy/README.md](../infra/deploy/README.md)
-- Dokploy deployment: [infra/deploy/DOKPLOY.md](../infra/deploy/DOKPLOY.md)
-- Rollback & DR playbook: [infra/deploy/ROLLBACK.md](../infra/deploy/ROLLBACK.md)
+- Quick Compose reference: [docs/DOCKER_DEPLOY.md](DOCKER_DEPLOY.md)
+- Dokploy deployment: [docs/DOKPLOY.md](DOKPLOY.md)
+- Rollback & DR playbook: [docs/ROLLBACK.md](ROLLBACK.md)
 
 ---
 
@@ -88,4 +88,4 @@ All migrations are **forward-only, transactional, and additive** (`IF NOT EXISTS
 ## 6. Upgrades & Rollback
 
 - **Upgrade:** Pin `IMAGE_TAG` in `.env.production` (or `git pull && $DC up -d --build`), then run `pnpm ops:verify-plans`.
-- **Rollback:** Follow [infra/deploy/ROLLBACK.md](../infra/deploy/ROLLBACK.md) (`IMAGE_TAG=<prev_tag> $DC up -d --no-deps api worker web`).
+- **Rollback:** Follow [docs/ROLLBACK.md](ROLLBACK.md) (`IMAGE_TAG=<prev_tag> $DC up -d --no-deps api worker web`).

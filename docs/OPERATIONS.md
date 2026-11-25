@@ -22,7 +22,7 @@ Measured and verified against `100,000` 1024-dim documents on PostgreSQL 15.20 (
 
 ## 2. Observability Stack
 
-- **Structured Logs & Correlation:** Fastify logs JSON via Pino (`LOG_LEVEL`) with `X-Request-Id` and W3C `traceparent` echoed on every response (`apps/api/src/server.ts`).
+- **Structured Logs & Correlation:** Fastify logs JSON via Pino (`LOG_LEVEL`) with `X-Request-Id` and W3C `traceparent` echoed on every response (`backend/api/src/server.ts`).
 - **Metrics Endpoints:**
   - API internal port: `http://api:9100/metrics` (`METRICS_PORT=9100` in prod; `/metrics` in dev on `:3002`).
   - Worker internal port: `http://worker:9092/metrics` (plus `/health` and `/ready`).
@@ -93,4 +93,4 @@ LIMIT 15;
 ./scripts/ops/restore.sh ./backups/rag-backup-<TIMESTAMP> --target-db rag_restore_verify --drop-after-verify
 ```
 
-For fast `< 2 minute` application rollback or full disaster recovery, follow **[infra/deploy/ROLLBACK.md](../infra/deploy/ROLLBACK.md)**.
+For fast `< 2 minute` application rollback or full disaster recovery, follow **[docs/ROLLBACK.md](ROLLBACK.md)**.

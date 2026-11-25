@@ -11,10 +11,10 @@ Navigation hub for architecture, API contracts, deployment, and production opera
   - [Examples](../examples/README.md) — Runnable CLI walkthrough for chat, adaptive retrieval, and the V3.1 RBAC Company Agent
 - **Operators & SREs**
   - [Deployment Guide](DEPLOYMENT.md) — Hardware sizing, BYOK setup, PgBouncer pooling, and forward-only migrations
-  - [Docker Compose + Caddy Deploy](../infra/deploy/README.md) — Single-server HTTPS deployment steps
-  - [Dokploy Deployment Guide](../infra/deploy/DOKPLOY.md) — Deploying with Dokploy Traefik or Cloudflare Tunnel
+  - [Docker Compose + Caddy Deploy](DOCKER_DEPLOY.md) — Single-server HTTPS deployment steps
+  - [Dokploy Deployment Guide](DOKPLOY.md) — Deploying with Dokploy Traefik or Cloudflare Tunnel
   - [Operations Runbook](OPERATIONS.md) — SLOs, Prometheus alert triage, HNSW maintenance, and backup/restore drills
-  - [Rollback Playbook](../infra/deploy/ROLLBACK.md) — Sub-2-minute application and DB rollback procedures
+  - [Rollback Playbook](ROLLBACK.md) — Sub-2-minute application and DB rollback procedures
 - **Quality, Benchmarks & Governance**
-  - [5-Way Benchmarks & Scale Telemetry](../BENCHMARK.md) — Head-to-head accuracy (LlamaIndex, LightRAG, Haystack, HippoRAG 2) and 100k-doc latency/load benchmarks
-  - [Contributing Guide](../CONTRIBUTING.md) · [Changelog](../CHANGELOG.md) · [Security Policy](../SECURITY.md) · [Code of Conduct](../CODE_OF_CONDUCT.md)
+  - [5-Way Benchmarks & Scale Telemetry](BENCHMARK.md) — Head-to-head accuracy (LlamaIndex, LightRAG, Haystack, HippoRAG 2) and 100k-doc latency/load benchmarks
+  - [Contributing Guide](../.github/CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security Policy](../.github/SECURITY.md) · [Code of Conduct](../.github/CODE_OF_CONDUCT.md)

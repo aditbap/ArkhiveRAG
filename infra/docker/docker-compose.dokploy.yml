@@ -1,6 +1,6 @@
 # Dokploy variant of docker-compose.deploy.yml: same stack, minus Caddy. Dokploy's own Traefik
 # or Cloudflare Tunnel terminates TLS and routes by domain; attach domains in the Dokploy UI
-# (or configure `TUNNEL_TOKEN`), so no public ports are published here. See infra/deploy/DOKPLOY.md.
+# (or configure `TUNNEL_TOKEN`), so no public ports are published here. See docs/DOKPLOY.md.
 #
 #   Compose Path:  ./infra/docker/docker-compose.dokploy.yml
 #   Environment:   paste .env.production.example (filled in + TUNNEL_TOKEN if used) into Environment tab
@@ -170,9 +170,7 @@ services:
     image: ${IMAGE_PREFIX:-arkhiverag}-api:${IMAGE_TAG:-latest}
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.node
-      args:
-        APP: api
+      dockerfile: backend/api/Dockerfile
     command: ["node", "node_modules/@rag/database/dist/migrate.js"]
     restart: "no"
     environment:
@@ -185,9 +183,7 @@ services:
     image: ${IMAGE_PREFIX:-arkhiverag}-api:${IMAGE_TAG:-latest}
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.node
-      args:
-        APP: api
+      dockerfile: backend/api/Dockerfile
     restart: unless-stopped
     environment:
       <<: *app-env
@@ -227,9 +223,7 @@ services:
     image: ${IMAGE_PREFIX:-arkhiverag}-worker:${IMAGE_TAG:-latest}
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.node
-      args:
-        APP: worker
+      dockerfile: backend/worker/Dockerfile
     restart: unless-stopped
     environment:
       <<: *app-env
@@ -260,7 +254,7 @@ services:
     image: ${IMAGE_PREFIX:-arkhiverag}-web:${IMAGE_TAG:-latest}
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.web
+      dockerfile: frontend/Dockerfile
       args:
         NEXT_PUBLIC_API_URL: https://${API_DOMAIN}/api/v1
     restart: unless-stopped

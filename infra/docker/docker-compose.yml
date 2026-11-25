@@ -160,7 +160,7 @@ services:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
-      - "3003:3000" # 3000 is taken by apps/web and 3002 by apps/api
+      - "3003:3000" # 3000 is taken by frontend and 3002 by backend/api
     depends_on:
       - prometheus
 

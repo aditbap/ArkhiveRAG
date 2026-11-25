@@ -34,7 +34,7 @@ flowchart LR
 
 1. **Single Transactional Source of Truth:** Document chunks (`vector(1024)` + `content_tsv`), Knowledge Graph entities/relations/aliases, RAPTOR community summaries, governance metadata, and learning telemetry live in PostgreSQL. Tenant isolation, ACL filtering, versioning, and backups share one ACID boundary.
 2. **Fail-Open Edge / Fail-Closed Security:**
-   - **Redis cache & rate-limit connection** (`apps/api/src/queue.ts`) uses `enableOfflineQueue: false`, `maxRetriesPerRequest: 1`, and `commandTimeout: 500ms` so Redis stalls degrade cache gracefully in `<= 511 ms` instead of blocking HTTP chat routes.
+   - **Redis cache & rate-limit connection** (`backend/api/src/queue.ts`) uses `enableOfflineQueue: false`, `maxRetriesPerRequest: 1`, and `commandTimeout: 500ms` so Redis stalls degrade cache gracefully in `<= 511 ms` instead of blocking HTTP chat routes.
    - **Multi-tenant & document-ACL enforcement** is **fail-closed in SQL** before any ranking or context assembly.
 3. **Database Performance Without Hardware Bloat (`100k` Docs Tested):**
    - **HNSW Raw Distance Ordering:** All dense vector queries (`ChunkRepository`, `KnowledgeGraphRepository`, `CommunityRepository`) execute inside a two-stage CTE ordered by `ORDER BY embedding <=> $vec::vector ASC` (with `SET LOCAL hnsw.ef_search` and automatic `hnsw.iterative_scan` probing on `pgvector >= 0.8`), never `ORDER BY (1 - (embedding <=> vec)) DESC`.

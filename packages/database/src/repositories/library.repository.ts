@@ -20,7 +20,7 @@ function slugify(name: string): string {
  * Shared-library (organization) management: lifecycle, members and invites.
  * Unlike the other repositories these methods take the target library id
  * explicitly — callers are responsible for authorising the acting user against
- * that library first (see apps/api/src/routes/libraries.ts).
+ * that library first (see backend/api/src/routes/libraries.ts).
  */
 export class LibraryRepository extends BaseRepository {
   constructor() {

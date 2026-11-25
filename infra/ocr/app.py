@@ -1,6 +1,6 @@
 """
 PaddleOCR sidecar. A separate Python process because PaddleOCR has no usable
-Node.js binding — the worker (apps/worker) calls this over HTTP instead of
+Node.js binding — the worker (backend/worker) calls this over HTTP instead of
 running OCR in-process.
 
 CPU-only by design (see project's SHAP/pgvector precedent for why: GPU

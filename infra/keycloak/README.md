@@ -6,12 +6,12 @@ volume) starts with no `rag-platform` realm and SSO fails with `ClientFetchError
 
 ```bash
 docker compose -f infra/docker/docker-compose.yml up -d keycloak
-infra/keycloak/setup-realm.sh              # realm + client "rag-web" + AUTH_* in apps/web/.env.local
+infra/keycloak/setup-realm.sh              # realm + client "rag-web" + AUTH_* in frontend/.env.local
 infra/keycloak/setup-realm.sh --dev-user   # additionally creates dev user admin / admin123
 ```
 
 It is idempotent: re-running keeps the realm and reuses the client secret already in
-`apps/web/.env.local` (a new one is generated only when missing). Variables it manages:
+`frontend/.env.local` (a new one is generated only when missing). Variables it manages:
 `AUTH_SECRET`, `AUTH_KEYCLOAK_ID`, `AUTH_KEYCLOAK_SECRET`, `AUTH_KEYCLOAK_ISSUER`.
 
 The API needs `KEYCLOAK_URL` and `KEYCLOAK_REALM` in the root `.env` to verify tokens.
