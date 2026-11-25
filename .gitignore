@@ -8,6 +8,7 @@ dist/
 out/
 build/
 *.tsbuildinfo
+next-env.d.ts
 
 # Environment
 .env
@@ -46,7 +47,6 @@ temp/
 # Docker volumes
 docker-data/
 postgres-data/
-qdrant-data/
 redis-data/
 
 # Agents & Skills
@@ -72,11 +72,13 @@ update-*.ts
 !README.md
 !BENCHMARK.md
 !infra/deploy/ROLLBACK.md
+!infra/deploy/DOKPLOY.md
 !CHANGELOG.md
 !CODE_OF_CONDUCT.md
 !CONTRIBUTING.md
 !SECURITY.md
 !docs/**/*.md
+!examples/**/*.md
 !.github/**/*.md
 
 # Uploads / Data

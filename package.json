@@ -1,30 +1,52 @@
 {
   "name": "rag-platform",
-  "version": "0.1.0",
+  "version": "3.1.0",
   "private": true,
-  "description": "Production AI RAG Platform",
+  "description": "Multi-tenant BYOK Enterprise Adaptive RAG & RBAC Agent Platform on PostgreSQL + pgvector",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aditbap/rag.git"
+  },
+  "homepage": "https://github.com/aditbap/rag#readme",
+  "bugs": {
+    "url": "https://github.com/aditbap/rag/issues"
+  },
+  "keywords": [
+    "rag",
+    "pgvector",
+    "postgresql",
+    "knowledge-graph",
+    "agentic-rag",
+    "rbac",
+    "byok",
+    "fastify",
+    "nextjs",
+    "monorepo"
+  ],
   "packageManager": "pnpm@10.13.1",
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
   },
   "scripts": {
-    "build": "turbo build",
     "dev": "turbo dev",
+    "build": "turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
+    "clean": "turbo clean",
     "test": "turbo test",
     "test:unit": "turbo test:unit",
     "test:integration": "turbo test:integration",
-    "clean": "turbo clean",
     "db:migrate": "pnpm --filter @rag/database db:migrate",
+    "db:new": "pnpm --filter @rag/database db:new",
+    "db:seed": "tsx scripts/dev/seed.ts",
     "eval:retrieval": "tsx scripts/evaluate-retrieval.ts",
     "ops:verify-plans": "tsx scripts/ops/verify-query-plans.mts",
     "ops:verify-resilience": "tsx scripts/ops/verify-resilience.mts",
     "ops:eval-agent": "tsx scripts/ops/eval-agentic-rag.mts",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "db:new": "pnpm --filter @rag/database db:new"
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\""
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

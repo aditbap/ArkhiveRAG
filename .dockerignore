@@ -14,9 +14,9 @@ graphify-out
 **/.env.local
 apps/web/.env*
 docs
+examples
 infra/docker/grafana
 scripts
 **/test
 **/tmp
 **/*.md
-!apps/web/README.md

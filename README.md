@@ -1,4 +1,10 @@
-# RAG Platform (Corporate Adaptive RAG V3.0)
+# RAG Platform (Corporate Adaptive RAG V3.1)
+
+[![CI](https://github.com/aditbap/rag/actions/workflows/ci.yml/badge.svg)](https://github.com/aditbap/rag/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/badge/release-v3.1.0-blue.svg)](CHANGELOG.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933.svg)](.nvmrc)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15%2B%20pgvector-336791.svg)](docs/ARCHITECTURE.md)
 
 Open-source, multi-tenant **Bring-Your-Own-Key (BYOK)** enterprise RAG platform built entirely on **PostgreSQL 15+ (`pgvector` HNSW + `pg_trgm` + tenant-scoped `btree_gin` FTS) + PgBouncer + Redis + MinIO + Keycloak** — no external graph database or separate search cluster required.
 
@@ -45,15 +51,17 @@ prometheus (api:9100 + worker:9092 + alerts.yml) ──► grafana:3003
 
 | Path | Purpose |
 |---|---|
-| `apps/api` | HTTP API (Fastify), `LightRagRetriever`, `RetrievalLearningEngine`, Prometheus `/metrics` |
-| `apps/worker` | Crash-safe ingestion worker (BullMQ), parent-child chunking, KG + entity resolution, `:9092` health/metrics |
-| `apps/web` | Web UI (Next.js 16) with adaptive retrieval mode selector & citations |
-| `packages/core` | Pure algorithms: PPR, entity resolution, temporal resolution, LTR, CRAG, RAPTOR, `SingleflightGroup`, regression gate |
-| `packages/database` | Drizzle schemas, read/write split repositories, SQL migrations (`0000`–`0015`) + runner |
-| `packages/providers` | BYOK LLM, embedding, reranker (Cloudflare/OpenAI/Gemini/NVIDIA/Cohere), MinIO, OCR, ClamAV adapters |
-| `packages/auth` | RBAC (`owner`/`admin`/`member`/`viewer`) & Keycloak RS256 JWT verification |
-| `infra/` | Docker Compose stacks, PgBouncer, tuned `postgresql.conf`, Caddyfile, Prometheus alerts, Grafana dashboard |
-| `docs/` | Architecture, OpenAPI 3.1 + API Reference, Deployment Guide, and Operations Runbook |
+| [`apps/api`](apps/api/README.md) | HTTP API (Fastify), `LightRagRetriever`, V3.1 `CompanyAgentOrchestrator`, `RetrievalLearningEngine`, Prometheus `/metrics` |
+| [`apps/worker`](apps/worker/README.md) | Crash-safe ingestion worker (BullMQ), parent-child chunking, KG + entity resolution, `:9092` health/metrics |
+| [`apps/web`](apps/web/README.md) | Web UI (Next.js 16 + Auth.js) with adaptive retrieval mode selector & citations |
+| [`packages/core`](packages/core/README.md) | Pure algorithms: PPR, entity/temporal resolution, LTR, CRAG, RAPTOR, `SingleflightGroup`, V3.1 RBAC `agent/` |
+| [`packages/database`](packages/database/README.md) | Drizzle schemas, read/write split repositories, SQL migrations (`0000`–`0015`) + runner |
+| [`packages/providers`](packages/providers/README.md) | BYOK LLM, embedding, reranker (Cloudflare/OpenAI/Gemini/NVIDIA/Cohere), MinIO, OCR, ClamAV adapters |
+| [`packages/auth`](packages/auth/README.md) | RBAC (`owner`/`admin`/`member`/`viewer`) & Keycloak RS256 JWT verification |
+| [`infra/`](infra/README.md) | Docker Compose stacks, PgBouncer, tuned `postgresql.conf`, Caddyfile, Prometheus alerts, Grafana dashboard |
+| [`scripts/`](scripts/README.md) | Operational gates (`ops:*`), scale load benchmarks, SHA-256 backup/restore drills, and local dev seeding |
+| [`docs/`](docs/README.md) | Architecture, OpenAPI 3.1 + API Reference, Deployment Guide, and Operations Runbook |
+| [`examples/`](examples/README.md) | Quickstart CLI walkthrough for adaptive chat and V3.1 RBAC Company Agent queries |
 
 ## Quick Start (Local)
 
