@@ -1,5 +1,5 @@
 groups:
-  - name: corporate-rag-slo-and-health
+  - name: arkhiverag-slo-and-health
     rules:
       - alert: RagApiDown
         expr: up{job="rag-api"} == 0
@@ -8,7 +8,7 @@ groups:
           severity: critical
           service: api
         annotations:
-          summary: "Corporate RAG API target is down"
+          summary: "ArkhiveRAG API target is down"
           description: "Prometheus cannot scrape rag-api metrics for >1m ({{ $labels.instance }})."
 
       - alert: RagWorkerDown
@@ -18,7 +18,7 @@ groups:
           severity: critical
           service: worker
         annotations:
-          summary: "Corporate RAG Worker target is down"
+          summary: "ArkhiveRAG Worker target is down"
           description: "Ingestion worker metrics endpoint is unreachable for >2m ({{ $labels.instance }})."
 
       - alert: RagHighHttp5xxRate

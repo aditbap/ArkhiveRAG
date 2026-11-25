@@ -1,4 +1,4 @@
-# RAG Platform (Corporate Adaptive RAG V3.1)
+# ArkhiveRAG (V3.1)
 
 [![CI](https://github.com/aditbap/rag/actions/workflows/ci.yml/badge.svg)](https://github.com/aditbap/rag/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/badge/release-v3.1.0-blue.svg)](CHANGELOG.md)

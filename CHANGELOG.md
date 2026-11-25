@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **Corporate Adaptive RAG** are documented in this file.
+All notable changes to **ArkhiveRAG** are documented in this file.
 
 ## [v3.1.0] - 2026-11-25 — RBAC-Enforced Agentic RAG & Evaluation
 
@@ -18,7 +18,7 @@ All notable changes to **Corporate Adaptive RAG** are documented in this file.
 ## [v3.0.0] - 2026-11-25
 
 ### Added
-- **Observability & Alerting:** Added 9 Prometheus SLO/health alert rules in `infra/deploy/alerts.yml` (verified via `promtool`), `rag-worker` (`:9092/metrics`) scraping in `infra/deploy/prometheus.yml`, fixed local dev API scrape port (`:3002`), and pre-provisioned Grafana dashboard `Corporate RAG V3.0 Overview`.
+- **Observability & Alerting:** Added 9 Prometheus SLO/health alert rules in `infra/deploy/alerts.yml` (verified via `promtool`), `rag-worker` (`:9092/metrics`) scraping in `infra/deploy/prometheus.yml`, fixed local dev API scrape port (`:3002`), and pre-provisioned Grafana dashboard `ArkhiveRAG V3.0 Overview`.
 - **Operations & CI Gates:** Added repeatable `scripts/ops/verify-resilience.mts` (`pnpm ops:verify-resilience`) and `pnpm ops:verify-plans` (`scripts/ops/verify-query-plans.mts`), and wired both into `.github/workflows/integration.yml`.
 - **Complete Documentation Suite:** Added `docs/ARCHITECTURE.md`, `docs/API.md`, `docs/openapi.yaml` (OpenAPI 3.1.0), `docs/DEPLOYMENT.md`, and `docs/OPERATIONS.md`.
 - **Open-Source Community Files:** Added `CHANGELOG.md`, `CODE_OF_CONDUCT.md`, `.github/PULL_REQUEST_TEMPLATE.md`, and GitHub issue templates.

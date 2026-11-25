@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Corporate RAG — Production Backup Script (PostgreSQL + MinIO + SHA-256 Manifest)
+# ArkhiveRAG — Production Backup Script (PostgreSQL + MinIO + SHA-256 Manifest)
 # Usage:
 #   DATABASE_URL="postgresql://..." ./scripts/ops/backup.sh [backup_root_dir]
 # Optional env vars:

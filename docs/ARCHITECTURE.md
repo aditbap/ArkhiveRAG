@@ -1,6 +1,6 @@
-# System Architecture — Corporate Adaptive RAG
+# System Architecture — ArkhiveRAG
 
-Corporate Adaptive RAG is an open-source, multi-tenant **Bring-Your-Own-Key (BYOK)** enterprise RAG platform built around **one primary database stack (PostgreSQL 15+ with `pgvector`, `pg_trgm`, `btree_gin`, and stored `tsvector`) + Redis + MinIO + Keycloak**. No separate vector database or graph database cluster is required.
+ArkhiveRAG is an open-source, multi-tenant **Bring-Your-Own-Key (BYOK)** enterprise RAG platform built around **one primary database stack (PostgreSQL 15+ with `pgvector`, `pg_trgm`, `btree_gin`, and stored `tsvector`) + Redis + MinIO + Keycloak**. No separate vector database or graph database cluster is required.
 
 ---
 

@@ -486,7 +486,7 @@ export function ChatArea({
         <div className={`w-full max-w-3xl ${messages.length > 0 ? 'pointer-events-auto' : ''}`}>
           {messages.length === 0 && (
             <div className="text-center mb-8 pointer-events-none">
-              <h2 className="text-[22px] font-normal text-zinc-900 dark:text-zinc-100">Let&apos;s Chat with RAG Assistant</h2>
+              <h2 className="text-[22px] font-normal text-zinc-900 dark:text-zinc-100">Let&apos;s Chat with ArkhiveRAG</h2>
             </div>
           )}
           {uploadStatus && (

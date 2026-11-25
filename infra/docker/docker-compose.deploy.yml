@@ -168,7 +168,7 @@ services:
 
   # One-shot: applies pending SQL migrations, then exits. api/worker wait for it to succeed.
   migrate:
-    image: ${IMAGE_PREFIX:-corporate-rag}-api:${IMAGE_TAG:-latest}
+    image: ${IMAGE_PREFIX:-arkhiverag}-api:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.node
@@ -183,7 +183,7 @@ services:
         condition: service_healthy
 
   api:
-    image: ${IMAGE_PREFIX:-corporate-rag}-api:${IMAGE_TAG:-latest}
+    image: ${IMAGE_PREFIX:-arkhiverag}-api:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.node
@@ -225,7 +225,7 @@ services:
       start_period: 20s
 
   worker:
-    image: ${IMAGE_PREFIX:-corporate-rag}-worker:${IMAGE_TAG:-latest}
+    image: ${IMAGE_PREFIX:-arkhiverag}-worker:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.node
@@ -258,7 +258,7 @@ services:
       start_period: 20s
 
   web:
-    image: ${IMAGE_PREFIX:-corporate-rag}-web:${IMAGE_TAG:-latest}
+    image: ${IMAGE_PREFIX:-arkhiverag}-web:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.web

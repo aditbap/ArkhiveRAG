@@ -1,6 +1,6 @@
 # Deployment Rollback & Disaster Recovery Playbook
 
-This playbook defines safe, repeatable rollback procedures for **Corporate RAG** (`api`, `worker`, `web`, PostgreSQL/`pgvector`, Redis, and MinIO).
+This playbook defines safe, repeatable rollback procedures for **ArkhiveRAG** (`api`, `worker`, `web`, PostgreSQL/`pgvector`, Redis, and MinIO).
 
 ---
 

@@ -1,6 +1,6 @@
 # `@rag/api`
 
-Fastify HTTP API for the Corporate Adaptive RAG Platform (`port 3002`, Prometheus metrics on `port 9100`).
+Fastify HTTP API for **ArkhiveRAG** (`port 3002`, Prometheus metrics on `port 9100`).
 
 ## Responsibilities
 

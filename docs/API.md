@@ -1,4 +1,4 @@
-# API Reference — Corporate Adaptive RAG
+# API Reference — ArkhiveRAG
 
 Machine-readable OpenAPI 3.1.0 specification: **[openapi.yaml](openapi.yaml)**.
 

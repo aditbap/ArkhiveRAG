@@ -1,5 +1,5 @@
 /**
- * Corporate RAG V3.0 — Repeatable Resilience, Multi-Tenant Security & Timeout Verifier
+ * ArkhiveRAG V3.0 — Repeatable Resilience, Multi-Tenant Security & Timeout Verifier
  *
  * Exercises critical production invariants directly against PostgreSQL or PgBouncer
  * (`:5432` or `:6432`) with zero external LLM/embedding API keys required:
@@ -219,7 +219,7 @@ async function verifyStatementTimeoutGuard() {
 }
 
 async function main() {
-  console.log(`\n=== Corporate RAG V3.0 Resilience & Isolation Gate (poolerMode=${DATABASE_POOLER_MODE}) ===`);
+  console.log(`\n=== ArkhiveRAG V3.0 Resilience & Isolation Gate (poolerMode=${DATABASE_POOLER_MODE}) ===`);
   const chunkRepo = new ChunkRepository();
 
   try {

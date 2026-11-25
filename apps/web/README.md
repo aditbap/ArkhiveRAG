@@ -1,6 +1,6 @@
 # `@rag/web` (`web`)
 
-Next.js 16 + Auth.js v5 (Keycloak OIDC) frontend application for the Corporate Adaptive RAG Platform (`port 3000`).
+Next.js 16 + Auth.js v5 (Keycloak OIDC) frontend application for **ArkhiveRAG** (`port 3000`).
 
 ## Features
 

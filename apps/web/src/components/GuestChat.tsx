@@ -105,7 +105,7 @@ export function GuestChat() {
       <div className="relative flex-1 overflow-y-auto">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-4 pb-32 text-center">
-            <h1 className="text-[22px] font-normal">Let&apos;s chat with RAG Assistant</h1>
+            <h1 className="text-[22px] font-normal">Let&apos;s chat with ArkhiveRAG</h1>
             <p className="mt-2 max-w-md text-sm text-zinc-600 dark:text-zinc-400">
               Guest chats are not saved. Sign in to upload documents, ask questions about them with cited sources, and keep your history.
             </p>

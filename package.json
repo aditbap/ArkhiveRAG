@@ -1,8 +1,8 @@
 {
-  "name": "rag-platform",
+  "name": "arkhiverag",
   "version": "3.1.0",
   "private": true,
-  "description": "Multi-tenant BYOK Enterprise Adaptive RAG & RBAC Agent Platform on PostgreSQL + pgvector",
+  "description": "ArkhiveRAG — Multi-tenant BYOK Enterprise Adaptive RAG & RBAC Agent Platform on PostgreSQL + pgvector",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -13,6 +13,7 @@
     "url": "https://github.com/aditbap/rag/issues"
   },
   "keywords": [
+    "arkhiverag",
     "rag",
     "pgvector",
     "postgresql",

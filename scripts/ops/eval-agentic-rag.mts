@@ -1,5 +1,5 @@
 /**
- * Corporate RAG V3.1 — Live 24-Case RBAC Agentic RAG & Evaluation Gate
+ * ArkhiveRAG V3.1 — Live 24-Case RBAC Agentic RAG & Evaluation Gate
  *
  * Seeds an isolated tenant org (`00000000-0000-4000-8000-000000000031`) in live
  * PostgreSQL (or PgBouncer `:6432`) with:
@@ -210,7 +210,7 @@ async function seedEvalOrg() {
 }
 
 async function main() {
-  console.log(`\n=== Corporate RAG V3.1 Live RBAC Agentic Evaluation (poolerMode=${DATABASE_POOLER_MODE}) ===`);
+  console.log(`\n=== ArkhiveRAG V3.1 Live RBAC Agentic Evaluation (poolerMode=${DATABASE_POOLER_MODE}) ===`);
 
   const toolsRepo = new AgentToolsRepository();
   const chunkRepo = new ChunkRepository();

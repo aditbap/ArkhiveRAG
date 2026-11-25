@@ -1,6 +1,6 @@
 # Examples
 
-Quick runnable walkthroughs for interacting with the Corporate Adaptive RAG API and the V3.1 RBAC Company Agent.
+Quick runnable walkthroughs for interacting with the **ArkhiveRAG** API and V3.1 RBAC Company Agent.
 
 ## Prerequisites
 

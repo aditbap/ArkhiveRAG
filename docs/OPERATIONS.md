@@ -1,4 +1,4 @@
-# Operations Runbook — Corporate Adaptive RAG
+# Operations Runbook — ArkhiveRAG
 
 This runbook defines measurable **Service Level Objectives (SLOs)**, alert triage steps for [infra/deploy/alerts.yml](../infra/deploy/alerts.yml), database maintenance, and verified backup/restore drills.
 
@@ -28,7 +28,7 @@ Measured and verified against `100,000` 1024-dim documents on PostgreSQL 15.20 (
   - Worker internal port: `http://worker:9092/metrics` (plus `/health` and `/ready`).
 - **Prometheus & Grafana:**
   - Production scrape + rules: [infra/deploy/prometheus.yml](../infra/deploy/prometheus.yml) + [infra/deploy/alerts.yml](../infra/deploy/alerts.yml).
-  - Pre-provisioned Grafana dashboard: `Corporate RAG V3.0 Overview` at `http://127.0.0.1:3003` (reach over SSH tunnel `ssh -L 3003:127.0.0.1:3003 <server>`).
+  - Pre-provisioned Grafana dashboard: `ArkhiveRAG V3.0 Overview` at `http://127.0.0.1:3003` (reach over SSH tunnel `ssh -L 3003:127.0.0.1:3003 <server>`).
 - **LLM & Tracing Extension Point:** Set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` for token/span tracing in Langfuse. Notice W3C `traceparent` headers propagate through Fastify so an OpenTelemetry HTTP/OTLP collector sidecar can be attached without altering application APIs.
 
 ---

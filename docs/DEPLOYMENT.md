@@ -1,4 +1,4 @@
-# Deployment Guide — Corporate Adaptive RAG
+# Deployment Guide — ArkhiveRAG
 
 This guide covers single-server production deployment, PgBouncer pooling, PostgreSQL memory/SSD tuning, forward-only migrations, and capacity sizing.
 

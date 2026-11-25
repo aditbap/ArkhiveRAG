@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Corporate RAG",
+  title: "ArkhiveRAG",
   description: "Ask questions about your documents and get answers with cited sources.",
 };
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Corporate RAG — Verified Restore & Non-Destructive Restore Drill Script
+# ArkhiveRAG — Verified Restore & Non-Destructive Restore Drill Script
 # Usage:
 #   ./scripts/ops/restore.sh <backup_dir> [--target-db <db_name>] [--drop-after-verify]
 # Example (non-destructive restore drill):

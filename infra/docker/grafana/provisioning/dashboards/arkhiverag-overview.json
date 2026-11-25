@@ -130,7 +130,7 @@
     }
   ],
   "schemaVersion": 39,
-  "tags": ["corporate-rag", "v3.0", "observability"],
+  "tags": ["arkhiverag", "v3.0", "observability"],
   "templating": {
     "list": [
       {
@@ -147,7 +147,7 @@
     ]
   },
   "time": { "from": "now-1h", "to": "now" },
-  "title": "Corporate RAG V3.0 Overview",
-  "uid": "corporate-rag-v3-overview",
+  "title": "ArkhiveRAG V3.0 Overview",
+  "uid": "arkhiverag-v3-overview",
   "version": 1
 }
