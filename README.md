@@ -15,8 +15,9 @@ Open-source, multi-tenant **Bring-Your-Own-Key (BYOK)** enterprise RAG platform 
 - **Proven `100,000`-Document Scale, High Concurrency & Resilience:**
   - **`7.93 ms` HNSW `p50`**, **`17.01 ms` composite GIN FTS `p50`**, **`14.74 ms` Hybrid `p50`** at `100,000` 1024-dim documents; **`165.1 req/s`** direct / **`249.6 req/s`** via PgBouncer (`:6432`) at `500` concurrent VUs (`0 / 970` errors).
   - **Crash-Safe & Chaos-Tested:** Fail-open Redis cache (`<= 511 ms` under outage), atomic single-transaction `replaceVersionChunks` (`0` duplicates on `SIGKILL`), `statement_timeout` protection, automated `EXPLAIN (ANALYZE, BUFFERS)` plan gate, and SHA-256 verified backup/restore drills.
-- **Enterprise Governance & Observability:**
+- **Enterprise Governance, RBAC Agent & Observability:**
   - Keycloak OIDC + RBAC (`owner`/`admin`/`member`/`viewer`), strict SQL tenant & document ACL isolation, ClamAV virus scanning, PaddleOCR sidecar, Pino JSON logs with `X-Request-Id` / W3C `traceparent`, Prometheus alerts, pre-provisioned Grafana dashboard, and optional Langfuse tracing.
+  - **V3.1 RBAC Company Agent (`/api/v1/agent` & `agentic: true` chat):** Bounded (`<= 3` hops) deterministic orchestrator deciding when to invoke `LightRagRetriever`, when to query allowlisted read-only PostgreSQL tools (`query_document_inventory`, `query_governance_audit`, `query_workspace_members`, `query_ingestion_jobs`, `query_security_audit_logs`), and when to fail-closed refuse unauthorized, cross-tenant, raw-SQL, or write probes with full `audit_logs` & Prometheus telemetry.
 
 ## Bring Your Own API Key (BYOK)
 
@@ -76,6 +77,7 @@ pnpm typecheck && pnpm lint && pnpm test:unit && pnpm build
 # Against running Postgres / PgBouncer:
 pnpm ops:verify-plans       # Asserts EXPLAIN (ANALYZE, BUFFERS) uses HNSW + composite GIN (fails on Seq Scan)
 pnpm ops:verify-resilience  # Verifies 40-query tenant/ACL isolation, idempotent chunk commits & statement_timeout
+pnpm ops:eval-agent         # Runs live 24-case RBAC Company Agent & policy refusal evaluation gate
 ```
 
 ## Documentation & Community

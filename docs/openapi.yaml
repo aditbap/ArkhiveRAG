@@ -23,6 +23,7 @@ tags:
   - name: Folders
   - name: Libraries
   - name: Retrieval Learning
+  - name: Agent
 
 paths:
   /health:
@@ -109,6 +110,9 @@ paths:
                   enum: [auto, mix, hybrid, local, global, naive]
                   default: auto
                 includeDrafts:
+                  type: boolean
+                  default: false
+                agentic:
                   type: boolean
                   default: false
       responses:
@@ -538,6 +542,54 @@ paths:
       responses:
         "200":
           description: Rebuild summary
+
+  /api/v1/agent/tools:
+    get:
+      tags: [Agent]
+      summary: List authorized and restricted Company Agent tools for caller role
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "200":
+          description: Role-scoped tool capabilities
+
+  /api/v1/agent/query:
+    post:
+      tags: [Agent]
+      summary: Execute RBAC-enforced Company Agent query (document retrieval + allowlisted DB tools + policy gate)
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+                documentIds:
+                  type: array
+                  items: { type: string, format: uuid }
+                synthesize: { type: boolean, default: true }
+      responses:
+        "200":
+          description: Structured agent decision, step trace, citations, or deterministic refusal
+
+  /api/v1/agent/audit:
+    get:
+      tags: [Agent]
+      summary: Inspect tenant agent tool allow/deny audit trail (owner only)
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 25 }
+      responses:
+        "200":
+          description: Recent agent security audit events
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
 
 components:
   securitySchemes:

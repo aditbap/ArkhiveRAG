@@ -93,3 +93,23 @@ flowchart TD
 | **Governance Lifecycle** | `draft`, `approved`, `active`, `superseded`, `archived` via `PATCH /api/v1/documents/:id/governance`. Drafts and archived docs are excluded from standard retrieval by default. |
 | **Immediate Revocation** | Role/membership removals or library deletion increment Redis `rag:acl-version:<orgId>` & `rag:cache-version:<orgId>` to invalidate cached responses immediately. |
 | **Production Safety Guard** | `assertProductionConfig()` refuses API/worker startup when `NODE_ENV=production` has weak defaults (`postgres`, `minioadmin`), missing HTTPS Keycloak URL, `*` CORS, missing provider credentials, or `ENABLE_VIRUS_SCAN=false`. |
+
+---
+
+## 6. V3.1 RBAC-Enforced Company Agent (`CompanyAgentOrchestrator`)
+
+Above the adaptive retrieval engine, V3.1 adds an optional **RBAC-enforced Company Agent** (`POST /api/v1/agent/query` or `agentic: true` on `POST /api/v1/chat/completions`) that decides per query whether to search documents, query allowlisted read-only PostgreSQL tools, combine both (`<= 3` hops), answer directly, or fail-closed refuse out-of-authority requests:
+
+```mermaid
+flowchart LR
+    Req["User Query + Verified Role"] --> Guard["Deterministic PolicyGuard (Secret / Cross-Tenant / Raw SQL / Write Block)"]
+    Guard -->|"Blocked"| Refuse["Auditable Refusal (0 DB Reads, 0 LLM Spend -> audit_logs)"]
+    Guard -->|"Allowed"| Plan["Bounded Planner (<= 3 Steps)"]
+    Plan --> Gate["Per-Tool Role Gate (authorizeToolCall)"]
+    Gate -->|"Denied"| Refuse
+    Gate -->|"Authorized"| Tools["Read-Only Tools: search_documents | search_draft_documents | query_document_inventory | query_governance_audit | query_workspace_members | query_ingestion_jobs | query_security_audit_logs"]
+    Tools --> Synth["Grounded Answer + Role-Isolated Cache"]
+```
+
+- **Zero Raw LLM SQL:** Structured DB tools live exclusively in `AgentToolsRepository` (`readDb`, hard `limit <= 50`, `requireTenant(orgId)`).
+- **Role-Isolated Caching:** Chat completions in `agentic: true` mode include `agent:<role>` in `queryHash` so restricted roles never inherit cached admin/owner structured outputs.

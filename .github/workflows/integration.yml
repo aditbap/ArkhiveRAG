@@ -55,6 +55,8 @@ jobs:
         run: pnpm ops:verify-plans
       - name: Verify multi-tenant isolation & resilience invariants
         run: pnpm ops:verify-resilience
+      - name: Evaluate RBAC agentic RAG (24-case live suite)
+        run: pnpm ops:eval-agent
       - name: Start API
         run: |
           node apps/api/dist/index.js > api.log 2>&1 &

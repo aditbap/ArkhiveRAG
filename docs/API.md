@@ -51,10 +51,15 @@ Additionally, `includeDrafts: true` in chat retrieval is restricted strictly to 
 
 ### Chat & Conversations
 - `POST /api/v1/guest/chat` — Public guest-only SSE stream (no login, no document access; strictly rate-limited per IP/minute, per IP/day, and global/day; returns `403` when `GUEST_CHAT_ENABLED=false`).
-- `POST /api/v1/chat/completions` (`chat:create`) — Adaptive RAG completion returning JSON or Server-Sent Events (`stream: true`). Supports `mode` (`auto` | `mix` | `hybrid` | `local` | `global` | `naive`), `conversationId`, `documentIds` ACL scope, and `includeDrafts` (`owner`/`admin` only).
+- `POST /api/v1/chat/completions` (`chat:create`) — Adaptive RAG completion returning JSON or Server-Sent Events (`stream: true`). Supports `mode` (`auto` | `mix` | `hybrid` | `local` | `global` | `naive`), `conversationId`, `documentIds` ACL scope, `includeDrafts` (`owner`/`admin` only), and `agentic` (`boolean`, defaults to `AGENT_DEFAULT_ENABLED=false`) to enable RBAC-gated structured DB + document routing.
 - `GET /api/v1/conversations` (`chat:read`) — List active (non-archived) conversations for current user & org.
 - `GET /api/v1/conversations/:id/messages` (`chat:read`) — Fetch conversation messages with hydrated citation chips.
 - `DELETE /api/v1/conversations/:id` (`chat:create`) — Delete user's conversation.
+
+### RBAC Company Agent (`/api/v1/agent`)
+- `GET /api/v1/agent/tools` (`chat:read`) — Lists tools authorized and restricted for the authenticated caller's role (`owner` | `admin` | `member` | `viewer`).
+- `POST /api/v1/agent/query` (`chat:create`) — Executes the bounded (`<= 3` steps) RBAC agent across document search and allowlisted read-only DB tools (`query_document_inventory`, `query_governance_audit`, `query_workspace_members`, `query_ingestion_jobs`, `query_security_audit_logs`). Returns `{ decision, refused, refusalCode, steps, structuredData, citations, answer }`.
+- `GET /api/v1/agent/audit` (`settings:update`, `owner` only) — Inspects recent `agent:tool_allow` and `agent:policy_deny` security audit log entries.
 
 ### Documents & Folders
 - `GET /api/v1/documents` (`documents:read`) — Paginated document list (`limit` 1..200, `offset`, `folderId`).

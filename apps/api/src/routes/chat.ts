@@ -5,6 +5,7 @@ import {
   conversations,
   messages,
   citations,
+  AgentToolsRepository,
   ChunkRepository,
   KnowledgeGraphRepository,
   CommunityRepository,
@@ -28,6 +29,7 @@ import {
   calibrateAnswerConfidence,
   compressConversationHistory,
   isRagQueryMode,
+  normalizeAgentRole,
   sanitizeConversationHistory,
   validateAnswerCitations,
   type EmbeddingProvider,
@@ -39,12 +41,20 @@ import { redisConnection } from '../queue.js';
 import { consumeRateLimit } from '../lib/rate-limit.js';
 import { sseCorsHeaders } from '../lib/sse.js';
 import { LightRagRetriever } from '../lib/lightrag-retriever.js';
+import { CompanyAgentOrchestrator } from '../lib/company-agent.js';
 import { RetrievalLearningEngine } from '../lib/learning-engine.js';
-import { ragPipelineDuration, ragCacheHits } from '../plugins/metrics.js';
+import {
+  ragPipelineDuration,
+  ragCacheHits,
+  ragAgentPolicyDenials,
+  ragAgentSteps,
+  ragAgentToolCalls,
+} from '../plugins/metrics.js';
 
 const chunkRepo = new ChunkRepository();
 const kgRepo = new KnowledgeGraphRepository();
 const communityRepo = new CommunityRepository();
+const agentToolsRepo = new AgentToolsRepository();
 const learningEngine = new RetrievalLearningEngine({ fastCache: redisConnection });
 
 // Lazy-initialize providers so startup doesn't crash when env vars aren't loaded at import time
@@ -134,8 +144,13 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         conversationId?: unknown;
         documentIds?: unknown;
         mode?: unknown;
+        agentic?: unknown;
       };
       const { stream } = body;
+      const useAgentic =
+        typeof body.agentic === 'boolean'
+          ? body.agentic
+          : process.env.AGENT_DEFAULT_ENABLED === 'true';
       const rawMessages = body.messages;
       if (!Array.isArray(rawMessages) || rawMessages.length === 0) {
         return reply
@@ -243,9 +258,10 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Version-aware & ACL-version-aware cache key (immediately invalidates on doc updates,
       // governance transitions, AND member role changes / permission revocations).
+      const callerRole = normalizeAgentRole(request.userRole);
       const includeDrafts =
         (body as { includeDrafts?: boolean }).includeDrafts === true &&
-        (request.userRole === 'owner' || request.userRole === 'admin');
+        (callerRole === 'owner' || callerRole === 'admin');
       const historyFingerprint =
         priorHistory.length > 0
           ? priorHistory
@@ -253,9 +269,10 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
               .map((m) => `${m.role}:${m.content.trim()}`)
               .join('|')
           : '';
+      const roleScope = useAgentic ? `agent:${callerRole}|` : '';
       const queryHash = crypto
         .createHash('sha256')
-        .update(`${ragMode}|${historyFingerprint}|${userQuery.toLowerCase().trim()}`)
+        .update(`${roleScope}${ragMode}|${historyFingerprint}|${userQuery.toLowerCase().trim()}`)
         .digest('hex');
 
       let cacheVersion = '0';
@@ -373,22 +390,165 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         communityRepo,
       });
 
-      const retrieval = await retriever.retrieve({
-        orgId,
-        userQuery,
-        history: priorHistory,
-        mode: ragMode,
-        documentIds,
-        includeDrafts,
-        rerankLimit: RERANK_LIMIT,
-        rerankMinScore: RERANK_MIN_SCORE,
-        retrievalConfig: activeConfig.config,
-        budget: {
-          maxEntityTokens: MAX_ENTITY_TOKENS,
-          maxRelationTokens: MAX_RELATION_TOKENS,
-          maxTotalTokens: MAX_TOTAL_TOKENS,
-        },
-      });
+      let agentMeta:
+        | {
+            decision: 'execute' | 'direct' | 'refuse';
+            role: string;
+            refused: boolean;
+            refusalCode?: string;
+            steps: Array<{ step: number; tool: string; outcome: string; summary: string }>;
+          }
+        | undefined;
+      let structuredToolContext = '';
+      let retrieval;
+
+      if (useAgentic) {
+        const orchestrator = new CompanyAgentOrchestrator({
+          retriever,
+          toolsRepo: agentToolsRepo,
+          llm: null,
+          telemetry: {
+            onToolCall: (tool, outcome) => ragAgentToolCalls.inc({ tool, outcome }),
+            onPolicyDenial: (role, code) => ragAgentPolicyDenials.inc({ role, code }),
+            onStepsCompleted: (steps) => ragAgentSteps.observe(steps),
+          },
+        });
+        const agentResult = await orchestrator.run({
+          orgId,
+          userId: userId as string,
+          role: callerRole,
+          userQuery,
+          history: priorHistory,
+          mode: ragMode,
+          documentIds,
+          rerankLimit: RERANK_LIMIT,
+          rerankMinScore: RERANK_MIN_SCORE,
+          retrievalConfig: activeConfig.config,
+          budget: {
+            maxEntityTokens: MAX_ENTITY_TOKENS,
+            maxRelationTokens: MAX_RELATION_TOKENS,
+            maxTotalTokens: MAX_TOTAL_TOKENS,
+          },
+          requestId: request.id,
+          ipAddress: request.ip,
+          synthesizeAnswer: false,
+        });
+
+        agentMeta = {
+          decision: agentResult.decision,
+          role: agentResult.role,
+          refused: agentResult.refused,
+          ...(agentResult.refusalCode ? { refusalCode: agentResult.refusalCode } : {}),
+          steps: agentResult.steps.map((s) => ({
+            step: s.step,
+            tool: s.tool,
+            outcome: s.outcome,
+            summary: s.summary,
+          })),
+        };
+
+        // Fail-closed policy refusal or direct capability summary: zero LLM spend
+        if (agentResult.refused || agentResult.decision === 'direct') {
+          const directContent = agentResult.answer;
+          const directMeta = { mode: 'naive', intent: 'agent_policy', agent: agentMeta };
+          if (stream) {
+            reply.hijack();
+            reply.raw.writeHead(200, {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              Connection: 'keep-alive',
+              ...sseCorsHeaders(request.headers.origin),
+            });
+            reply.raw.write(
+              `data: ${JSON.stringify({ type: 'meta', conversationId, retrieval: directMeta })}\n\n`,
+            );
+            reply.raw.write(`data: ${JSON.stringify({ type: 'citations', citations: [] })}\n\n`);
+            reply.raw.write(`data: ${JSON.stringify({ type: 'chunk', content: directContent })}\n\n`);
+            reply.raw.write('data: [DONE]\n\n');
+            reply.raw.end();
+            return;
+          }
+          return reply.status(200).send({
+            id: crypto.randomUUID(),
+            conversationId,
+            role: 'assistant',
+            content: directContent,
+            citations: [],
+            retrieval: directMeta,
+            agent: agentMeta,
+          });
+        }
+
+        structuredToolContext = agentResult.structuredContextText;
+        retrieval = agentResult.retrieval;
+      } else {
+        retrieval = await retriever.retrieve({
+          orgId,
+          userQuery,
+          history: priorHistory,
+          mode: ragMode,
+          documentIds,
+          includeDrafts,
+          rerankLimit: RERANK_LIMIT,
+          rerankMinScore: RERANK_MIN_SCORE,
+          retrievalConfig: activeConfig.config,
+          budget: {
+            maxEntityTokens: MAX_ENTITY_TOKENS,
+            maxRelationTokens: MAX_RELATION_TOKENS,
+            maxTotalTokens: MAX_TOTAL_TOKENS,
+          },
+        });
+      }
+
+      if (!retrieval) {
+        // Structured-DB-only agent turn (no document retrieval needed): still synthesize cleanly via LLM
+        const fallbackPrompt =
+          `You are an internal enterprise assistant for role '${callerRole}'. Answer accurately using ONLY the verified database tool output below.\n\n${structuredToolContext}`;
+        const queryLlm = getQueryLlmProvider();
+        const llmMessages: LLMMessage[] = [
+          { role: 'system', content: fallbackPrompt },
+          { role: 'user', content: userQuery },
+        ];
+        const structuredMeta = { mode: 'naive', intent: 'agent_structured_db', agent: agentMeta };
+        if (stream) {
+          reply.hijack();
+          reply.raw.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+            ...sseCorsHeaders(request.headers.origin),
+          });
+          reply.raw.write(`data: ${JSON.stringify({ type: 'meta', conversationId, retrieval: structuredMeta })}\n\n`);
+          reply.raw.write(`data: ${JSON.stringify({ type: 'citations', citations: [] })}\n\n`);
+          let full = '';
+          for await (const chunk of queryLlm.generateStream(llmMessages)) {
+            if (chunk.content) {
+              full += chunk.content;
+              reply.raw.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk.content })}\n\n`);
+            }
+          }
+          if (full.trim()) {
+            await redisConnection.setex(cacheKey, 300, JSON.stringify({ content: full, citations: [], retrievalMeta: structuredMeta })).catch(() => undefined);
+          }
+          reply.raw.write('data: [DONE]\n\n');
+          reply.raw.end();
+          return;
+        }
+        const res = await queryLlm.generate(llmMessages);
+        if (res.content.trim()) {
+          await redisConnection.setex(cacheKey, 300, JSON.stringify({ content: res.content, citations: [], retrievalMeta: structuredMeta })).catch(() => undefined);
+        }
+        return reply.status(200).send({
+          id: crypto.randomUUID(),
+          conversationId,
+          role: 'assistant',
+          content: res.content,
+          citations: [],
+          retrieval: structuredMeta,
+          agent: agentMeta,
+          usage: res.usage,
+        });
+      }
 
       ragPipelineDuration.observe({ stage: 'query_analysis' }, retrieval.timingsMs.queryAnalysis / 1000);
       ragPipelineDuration.observe({ stage: 'retrieval' }, (retrieval.timingsMs.embedding + retrieval.timingsMs.retrieval) / 1000);
@@ -429,6 +589,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
           highLevel: retrieval.analysis.highLevelKeywords,
           lowLevel: retrieval.analysis.lowLevelKeywords,
         },
+        ...(agentMeta ? { agent: agentMeta } : {}),
       };
 
       retrievalSpan.end({ output: retrievalMeta });
@@ -464,6 +625,9 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
         hasGraphData: assembled.entitiesUsed.length > 0 || assembled.relationsUsed.length > 0,
       });
       const promptAddenda: string[] = [];
+      if (structuredToolContext) {
+        promptAddenda.push(structuredToolContext);
+      }
       if (retrieval.crag.action === 'abstain_hint') {
         promptAddenda.push(CRAG_LOW_CONFIDENCE_DIRECTIVE);
       }

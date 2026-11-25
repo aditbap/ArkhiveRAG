@@ -50,6 +50,27 @@ export const ragRerankerFallbacks = new client.Counter({
   registers: [register],
 });
 
+export const ragAgentToolCalls = new client.Counter({
+  name: 'rag_agent_tool_calls_total',
+  help: 'RBAC company agent tool executions by tool name and policy outcome',
+  labelNames: ['tool', 'outcome'],
+  registers: [register],
+});
+
+export const ragAgentPolicyDenials = new client.Counter({
+  name: 'rag_agent_policy_denials_total',
+  help: 'RBAC company agent deterministic policy refusals by role and code',
+  labelNames: ['role', 'code'],
+  registers: [register],
+});
+
+export const ragAgentSteps = new client.Histogram({
+  name: 'rag_agent_steps_count',
+  help: 'Number of bounded agent tool steps executed per request',
+  buckets: [0, 1, 2, 3, 5],
+  registers: [register],
+});
+
 function withMetricsTimeout<T>(promise: Promise<T>, ms = 500): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('metrics collect timeout')), ms);

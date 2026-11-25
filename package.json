@@ -21,6 +21,7 @@
     "eval:retrieval": "tsx scripts/evaluate-retrieval.ts",
     "ops:verify-plans": "tsx scripts/ops/verify-query-plans.mts",
     "ops:verify-resilience": "tsx scripts/ops/verify-resilience.mts",
+    "ops:eval-agent": "tsx scripts/ops/eval-agentic-rag.mts",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "db:new": "pnpm --filter @rag/database db:new"

@@ -46,6 +46,7 @@ Measured and verified against `100,000` 1024-dim documents on PostgreSQL 15.20 (
 | **`RagRerankerFallbackSpike`** | Cloudflare/Cohere reranker throttling or timeouts | Check `rag_reranker_fallbacks_total` reason labels (`timeout`, `rate_limit`); confirm upstream provider status. |
 | **`RagIngestionQueueBacklog`** | Worker throughput < upload rate or OCR/embedding bottleneck | Check `worker_active_jobs` & OCR container health; scale worker replicas or `WORKER_CONCURRENCY`. |
 | **`RagWorkerStalledOrFailingJobs`** | Worker `SIGKILL`/OOM mid-job or corrupt file failing retries | Inspect `ingestion_jobs` where `status = 'failed'`; note `replaceVersionChunks` guarantees zero duplicate chunks on retries. |
+| **`RagAgentPolicyDenialSpike`** | Role boundary probing, prompt injection, or misconfigured UI role | Inspect `GET /api/v1/agent/audit` (owner only) or `audit_logs` where `action = 'agent:policy_deny'` correlated with `userId` and `requestId`. |
 
 ---
 
@@ -59,6 +60,9 @@ pnpm ops:verify-plans
 
 # Confirm 40-query tenant/ACL isolation, idempotent chunk replacement, and statement_timeout
 pnpm ops:verify-resilience
+
+# Run live 24-case RBAC Company Agent evaluation across all 4 roles & 6 categories
+pnpm ops:eval-agent
 ```
 
 ### Compacting HNSW Tombstones After Bulk Purges

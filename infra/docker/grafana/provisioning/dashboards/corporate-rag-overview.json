@@ -115,6 +115,18 @@
       ],
       "title": "Cache Hits, Reranker Fallbacks & Dependency Errors",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 27 },
+      "id": 10,
+      "targets": [
+        { "expr": "sum by (tool, outcome) (rate(rag_agent_tool_calls_total[5m]) * 60)", "legendFormat": "tool:{{tool}} ({{outcome}})/min", "refId": "A" },
+        { "expr": "sum by (role, code) (increase(rag_agent_policy_denials_total[15m]))", "legendFormat": "denied:{{role}}/{{code}}", "refId": "B" }
+      ],
+      "title": "RBAC Company Agent Tool Calls & Policy Denials",
+      "type": "timeseries"
     }
   ],
   "schemaVersion": 39,

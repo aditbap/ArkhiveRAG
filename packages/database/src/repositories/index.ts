@@ -8,3 +8,4 @@ export * from './library.repository.js';
 export * from './knowledge-graph.repository.js';
 export * from './learning.repository.js';
 export * from './community.repository.js';
+export * from './agent-tools.repository.js';
