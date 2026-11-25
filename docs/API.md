@@ -7,8 +7,10 @@ Machine-readable OpenAPI 3.1.0 specification: **[openapi.yaml](openapi.yaml)**.
 ## 1. Base URLs, Auth & Correlation Headers
 
 - **Default local API URL:** `http://localhost:3002`
-- **Authentication:** Every `/api/v1/*` route except `/api/v1/guest/chat` requires a Keycloak OIDC `Authorization: Bearer <jwt>` token.
-- **Organization / Library Selection:** Set `X-Organization-Id: <uuid>` (or query within the user's active organization claim/personal workspace). All membership permissions are resolved against the target organization.
+- **Authentication:** Every `/api/v1/*` route (except `/api/v1/guest/chat`) and `/mcp` accepts either:
+  - A Keycloak OIDC `Authorization: Bearer <jwt>` token, **or**
+  - An org-scoped API key (`ak_live_<prefix>_<secret>`) via `X-Api-Key: ak_live_...` or `Authorization: Bearer ak_live_...`.
+- **Organization / Library Selection:** Set `X-Org-Id: <uuid>` (when using a Keycloak JWT to switch between personal/shared libraries). Scoped API keys are pinned to their creating organization (`X-Org-Id` for any other org is rejected with `403 FORBIDDEN`) and enforce `min(apiKey.role, creatorMembership.role)`.
 - **Distributed Correlation Headers:** Send `X-Request-Id` and/or W3C `traceparent`; the API validates/propagates both on every response and propagates `traceId` into BullMQ ingestion jobs.
 - **Standard Error Envelope:**
   ```json
@@ -90,3 +92,35 @@ Additionally, `includeDrafts: true` in chat retrieval is restricted strictly to 
 - `POST /api/v1/retrieval/optimize` (`documents:delete`) — Run bounded weight optimization + 6-metric regression gate over `LearningEvalCase[]`.
 - `POST /api/v1/retrieval/configs/:id/promote` (`documents:delete`) — Promote or roll back to a specific immutable retrieval config UUID.
 - `POST /api/v1/retrieval/communities/rebuild` (`documents:delete`) — Incrementally rebuild ACL-safe RAPTOR community summaries for the org.
+
+---
+
+## 5. Scoped API Keys (`/api/v1/api-keys`) & SDKs
+
+- `GET /api/v1/api-keys` (`settings:read`) — List organization API keys (`keyPrefix`, role, expiry, last used timestamp; hashes are never exposed).
+- `POST /api/v1/api-keys` (`members:manage`, interactive user session only) — Mint a scoped key (`viewer` | `member` | `admin`, `expiresInDays` 1..365). Returns the plaintext `ak_live_...` secret once.
+- `DELETE /api/v1/api-keys/:id` (`members:manage`) — Revoke an active API key immediately (writes `api_key:revoke` to `audit_logs`).
+
+Official zero-dependency client SDKs are included in [`sdks/typescript/`](../sdks/typescript/README.md) (`@arkhiverag/sdk`) and [`sdks/python/`](../sdks/python/README.md) (`arkhiverag`).
+
+---
+
+## 6. Native RBAC-Enforced MCP Server (`POST /mcp`)
+
+Expose ArkhiveRAG directly inside Cursor, Claude Desktop, VS Code, or Windsurf over Streamable HTTP JSON-RPC 2.0 (`protocolVersion: "2025-03-26"`):
+
+```json
+{
+  "mcpServers": {
+    "arkhiverag": {
+      "url": "http://localhost:3002/mcp",
+      "headers": {
+        "Authorization": "Bearer ak_live_your_org_scoped_key"
+      }
+    }
+  }
+}
+```
+
+- `tools/list` dynamically filters exposed tools (`search_knowledge_base`, `ask_company_agent`, `list_documents`, `admin`+ `get_governance_audit`, `owner`-only `get_security_audit_logs`) to match the credential's live RBAC role.
+- `tools/call` enforces fail-closed role checks and records every execution/denial in `audit_logs` (`mcp:tool_allow` / `mcp:policy_deny`).

@@ -15,6 +15,7 @@ graphify-out
 frontend/.env*
 docs
 examples
+sdks
 infra/docker/grafana
 scripts
 **/test

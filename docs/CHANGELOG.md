@@ -2,6 +2,18 @@
 
 All notable changes to **ArkhiveRAG** are documented in this file.
 
+## [v3.2.0] - 2026-11-25 — Developer Platform: Scoped API Keys, MCP Server & SDKs
+
+### Added
+- **Org-Scoped, Role-Bound API Keys (`0016_api_keys.sql`, `@rag/auth`, `/api/v1/api-keys`):**
+  - Added SHA-256 hashed `ak_live_...` API keys with constant-time verification, `min(keyRole, creatorMembershipRole)` runtime privilege capping, strict single-org pinning, audit logging, and a Next.js **API Keys** modal in `frontend/`.
+- **Native RBAC-Enforced MCP Server (`POST /mcp`):**
+  - Added Streamable HTTP JSON-RPC 2.0 endpoint (`arkhiverag-mcp`) supporting `initialize`, `ping`, dynamic role-filtered `tools/list`, and audited fail-closed `tools/call` over `LightRagRetriever`, `CompanyAgentOrchestrator`, and workspace inventory/audit tools.
+- **Official Zero-Dependency Client SDKs (`sdks/typescript`, `sdks/python`):**
+  - Added `@arkhiverag/sdk` (native `fetch` + `ReadableStream` SSE) and `arkhiverag` (pure Python 3.10+ stdlib) with unit tests covering auth headers, SSE streaming, multipart upload, Company Agent, and API key lifecycle.
+- **Monorepo Restructuring & Brand Identity:**
+  - Separated `frontend/`, `backend/{api,worker}/` with colocated `Dockerfile`s, consolidated docs under `docs/`, added ArkhiveRAG logos/favicons/UI brand marks, and updated GitHub URLs to `aditbap/ArkhiveRAG`.
+
 ## [v3.1.0] - 2026-11-25 — RBAC-Enforced Agentic RAG & Evaluation
 
 ### Added

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arkhiverag"
+version = "3.2.0"
+description = "Zero-dependency Python client SDK for ArkhiveRAG (REST API, SSE streaming, RBAC Company Agent, and API keys)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["arkhiverag*"]

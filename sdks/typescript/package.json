@@ -1,0 +1,26 @@
+{
+  "name": "@arkhiverag/sdk",
+  "version": "3.2.0",
+  "description": "Zero-dependency TypeScript client SDK for ArkhiveRAG (REST API, SSE streaming, RBAC Company Agent, and API keys)",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "lint": "eslint src/",
+    "test": "tsx --test test/*.test.ts",
+    "test:unit": "tsx --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

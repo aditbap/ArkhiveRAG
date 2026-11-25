@@ -13,6 +13,8 @@ import folderRoutes from './routes/folders.js';
 import { libraryRoutes } from './routes/libraries.js';
 import { learningRoutes } from './routes/learning.js';
 import { agentRoutes } from './routes/agent.js';
+import { apiKeyRoutes } from './routes/api-keys.js';
+import { mcpRoutes } from './routes/mcp.js';
 import { ragRedisDegraded, registerMetrics } from './plugins/metrics.js';
 import { redisConnection } from './queue.js';
 import { consumeRateLimit } from './lib/rate-limit.js';
@@ -140,7 +142,14 @@ export function buildServer(): FastifyInstance {
     api.register(libraryRoutes, { prefix: '/libraries' });
     api.register(learningRoutes, { prefix: '/retrieval' });
     api.register(agentRoutes, { prefix: '/agent' });
+    api.register(apiKeyRoutes, { prefix: '/api-keys' });
   }, { prefix: '/api/v1' });
+
+  // Streamable HTTP MCP Server (/mcp): accepts Bearer Keycloak JWT or scoped X-Api-Key / ak_live_...
+  server.register(async (mcp) => {
+    mcp.addHook('onRequest', authenticate);
+    mcp.register(mcpRoutes);
+  }, { prefix: '/mcp' });
 
   return server;
 }

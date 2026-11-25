@@ -8,8 +8,8 @@
 
 ### Multi-Tenant BYOK Enterprise Adaptive RAG & RBAC Company Agent on PostgreSQL + pgvector
 
-[![CI](https://img.shields.io/github/actions/workflow/status/aditbap/rag/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI)](https://github.com/aditbap/rag/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/Release-v3.1.0-00A6CE?style=for-the-badge)](docs/CHANGELOG.md)
+[![CI](https://img.shields.io/github/actions/workflow/status/aditbap/ArkhiveRAG/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI)](https://github.com/aditbap/ArkhiveRAG/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/badge/Release-v3.2.0-00A6CE?style=for-the-badge)](docs/CHANGELOG.md)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5%2F6-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](tsconfig.base.json)
 [![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](.nvmrc)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15%2B%20pgvector-336791?style=for-the-badge&logo=postgresql&logoColor=white)](docs/ARCHITECTURE.md)
@@ -22,7 +22,7 @@
 
 ArkhiveRAG unifies hybrid `pgvector` HNSW search, PostgreSQL-native Knowledge Graphs, temporal policy governance, and a bounded RBAC Company Agent into one open-source, Bring-Your-Own-Key (BYOK) platform — with **no separate vector database or graph cluster required**.
 
-[Beyond Traditional RAG](#beyond-traditional-rag) · [Benchmarks](#verified-benchmarks) · [Features](#features) · [Architecture](#architecture) · [BYOK Providers](#bring-your-own-api-key-byok) · [Quick Start](#quick-start) · [API](#api-overview) · [Docs](#documentation--community)
+[Beyond Traditional RAG](#beyond-traditional-rag) · [Benchmarks](#verified-benchmarks) · [Features](#features) · [Architecture](#architecture) · [BYOK Providers](#bring-your-own-api-key-byok) · [Quick Start](#quick-start) · [API & SDKs](#api-mcp--sdk-overview) · [Docs](#documentation--community)
 
 </div>
 
@@ -94,7 +94,9 @@ flowchart LR
 | [`packages/core`](packages/core/README.md) | `@rag/core` — Pure algorithms: PPR, entity/temporal resolution, LTR, CRAG, RAPTOR, `SingleflightGroup`, V3.1 RBAC `agent/` |
 | [`packages/database`](packages/database/README.md) | `@rag/database` — Drizzle ORM schemas, `db` / `readDb` repositories, PgBouncer pooler detection, SQL migrations (`0000`–`0015`) |
 | [`packages/providers`](packages/providers/README.md) | `@rag/providers` — BYOK LLM, `1024`-dim embedding, and reranker adapters, plus MinIO, PaddleOCR, ClamAV, and Langfuse |
-| [`packages/auth`](packages/auth/README.md) | `@rag/auth` — Keycloak RS256 JWKS verification and 4-tier RBAC (`owner`/`admin`/`member`/`viewer`) middleware |
+| [`packages/auth`](packages/auth/README.md) | `@rag/auth` — Keycloak RS256 JWKS verification, `ak_live_...` scoped API keys & 4-tier RBAC (`owner`/`admin`/`member`/`viewer`) |
+| [`sdks/typescript`](sdks/typescript/README.md) | `@arkhiverag/sdk` — Zero-dependency TypeScript/JS client (`fetch` + SSE streaming + Agent + Documents) |
+| [`sdks/python`](sdks/python/README.md) | `arkhiverag` — Zero-dependency Python 3.10+ client (`ArkhiveRAGClient`, SSE streaming, multipart upload) |
 | [`infra/`](infra/README.md) | Docker Compose stacks, PgBouncer, tuned `postgresql.conf`, Caddyfile, Prometheus alerts, Grafana dashboard, Keycloak, OCR |
 | [`scripts/`](scripts/README.md) | Operational verification gates (`ops:*`), scale load benchmarks, SHA-256 backup/restore drills, and dev seed script |
 | [`docs/`](docs/README.md) | Architecture overview, OpenAPI 3.1 + API Reference, Deployment/Dokploy/Rollback guides, Benchmarks & Changelog |
@@ -139,7 +141,8 @@ flowchart LR
 <details>
 <summary><b>Enterprise Security, Governance & Full Observability</b></summary>
 
-- **Identity & Document Lifecycle:** Keycloak OIDC (`owner`/`admin`/`member`/`viewer`), strict tenant & document ACL filtering, ClamAV virus scanning, PaddleOCR sidecar for scanned PDFs/images, and temporal governance transitions (`PATCH /documents/:id/governance`).
+- **Identity & Document Lifecycle:** Keycloak OIDC + org-scoped, role-bound API keys (`ak_live_...`), strict tenant & document ACL filtering, ClamAV virus scanning, PaddleOCR sidecar for scanned PDFs/images, and temporal governance transitions (`PATCH /documents/:id/governance`).
+- **Native MCP Server & Official SDKs:** Streamable HTTP MCP server (`POST /mcp`) with per-tool RBAC filtering + zero-dependency TypeScript ([`@arkhiverag/sdk`](sdks/typescript/README.md)) and Python ([`arkhiverag`](sdks/python/README.md)) SDKs.
 - **Observability Stack:** Structured Pino JSON logging with `X-Request-Id` and W3C `traceparent` propagation, optional Langfuse LLM tracing, Prometheus alerts (`infra/deploy/alerts.yml`), and a pre-provisioned Grafana dashboard ([arkhiverag-overview.json](infra/docker/grafana/provisioning/dashboards/arkhiverag-overview.json)).
 
 </details>
@@ -193,9 +196,9 @@ pnpm ops:eval-agent         # Runs live 24-case RBAC Company Agent & policy refu
 
 ---
 
-## API Overview
+## API, MCP & SDK Overview
 
-All `/api/v1/*` routes (except `/api/v1/guest/chat`) require a Keycloak OIDC `Authorization: Bearer <jwt>` token and honor `X-Organization-Id` + W3C `traceparent` / `X-Request-Id`. Full guide: **[docs/API.md](docs/API.md)** · OpenAPI 3.1 schema: **[docs/openapi.yaml](docs/openapi.yaml)** · CLI walkthrough: **[examples/quickstart.sh](examples/quickstart.sh)**.
+All `/api/v1/*` routes (except `/api/v1/guest/chat`) and `/mcp` accept either a Keycloak OIDC `Authorization: Bearer <jwt>` token or an org-scoped API key (`X-Api-Key: ak_live_...` / `Bearer ak_live_...`). Full guide: **[docs/API.md](docs/API.md)** · OpenAPI 3.1 schema: **[docs/openapi.yaml](docs/openapi.yaml)** · CLI walkthrough: **[examples/quickstart.sh](examples/quickstart.sh)**.
 
 <details>
 <summary><b>Chat, Adaptive Retrieval & RBAC Company Agent</b></summary>
@@ -230,7 +233,29 @@ All `/api/v1/*` routes (except `/api/v1/guest/chat`) require a Keycloak OIDC `Au
 | `POST` / `GET` | `/api/v1/retrieval/feedback`, `/api/v1/retrieval/metrics` | Record thumbs feedback and inspect quality, latency, CRAG verdicts, and token telemetry |
 | `POST` | `/api/v1/retrieval/optimize` | Run bounded parameter optimization with 6-metric non-regression gate |
 | `POST` | `/api/v1/retrieval/communities/rebuild` | Rebuild ACL-safe RAPTOR community summaries |
+| `GET` / `POST` / `DELETE` | `/api/v1/api-keys`, `/api/v1/api-keys/:id` | List, mint once (`viewer`\|`member`\|`admin`), and revoke org-scoped API keys |
+| `POST` | `/mcp` | Streamable HTTP JSON-RPC 2.0 MCP Server (per-tool RBAC `tools/list` & `tools/call`) |
 | `GET` | `/health`, `/ready`, `/metrics` | Liveness, live dependency readiness (`postgres`, `redis`, `minio`), and Prometheus metrics |
+
+</details>
+
+<details>
+<summary><b>SDKs & MCP Client Quickstart</b></summary>
+
+```json
+// Cursor / Claude Desktop MCP config
+{
+  "mcpServers": {
+    "arkhiverag": {
+      "url": "http://localhost:3002/mcp",
+      "headers": { "Authorization": "Bearer ak_live_..." }
+    }
+  }
+}
+```
+
+- **TypeScript (`@arkhiverag/sdk`):** See [`sdks/typescript/README.md`](sdks/typescript/README.md)
+- **Python (`arkhiverag`):** See [`sdks/python/README.md`](sdks/python/README.md)
 
 </details>
 
@@ -250,11 +275,11 @@ All `/api/v1/*` routes (except `/api/v1/guest/chat`) require a Keycloak OIDC `Au
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=aditbap%2Frag&type=timeline&legend=bottom-right">
+<a href="https://www.star-history.com/?repos=aditbap%2FArkhiveRAG&type=timeline&legend=bottom-right">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=aditbap/rag&type=timeline&theme=dark&legend=bottom-right" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=aditbap/rag&type=timeline&legend=bottom-right" />
-    <img alt="Star History Chart" src="https://api.star-history.com/image?repos=aditbap/rag&type=timeline&legend=bottom-right" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=aditbap/ArkhiveRAG&type=timeline&theme=dark&legend=bottom-right" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=aditbap/ArkhiveRAG&type=timeline&legend=bottom-right" />
+    <img alt="Star History Chart" src="https://api.star-history.com/image?repos=aditbap/ArkhiveRAG&type=timeline&legend=bottom-right" />
   </picture>
 </a>
 

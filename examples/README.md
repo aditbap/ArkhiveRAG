@@ -5,9 +5,9 @@ Quick runnable walkthroughs for interacting with the **ArkhiveRAG** API and V3.1
 ## Prerequisites
 
 1. Start the local stack (`docker compose -f infra/docker/docker-compose.yml up -d`), run `pnpm db:migrate`, and start the API (`pnpm dev` or `pnpm --filter @rag/api dev`).
-2. Obtain a valid Keycloak JWT access token for a seeded or logged-in user and export it:
+2. Obtain either a valid Keycloak JWT access token **or** an org-scoped API key (`ak_live_...` from the UI **API Keys** menu or `POST /api/v1/api-keys`) and export it:
    ```bash
-   export RAG_TOKEN="<your-keycloak-jwt>"
+   export RAG_TOKEN="<your-keycloak-jwt-or-ak_live_key>"
    export API_URL="http://localhost:3002"   # optional, defaults to http://localhost:3002
    ```
 3. *(Optional)* Pass `X_ORG_ID="<library-uuid>"` if targeting a specific shared library.

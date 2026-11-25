@@ -1,5 +1,17 @@
 export type Role = 'owner' | 'admin' | 'member' | 'viewer';
 
+export const ROLE_RANK: Record<Role, number> = {
+  viewer: 0,
+  member: 1,
+  admin: 2,
+  owner: 3,
+};
+
+/** Return the lower-privilege of two roles (used to cap API key scope against live membership). */
+export function capRole(a: Role, b: Role): Role {
+  return ROLE_RANK[a] <= ROLE_RANK[b] ? a : b;
+}
+
 export type Action = 
   | 'documents:create'
   | 'documents:read'

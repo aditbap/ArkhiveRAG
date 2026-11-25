@@ -9,3 +9,4 @@ export * from './folders.js';
 export * from './knowledge-graph.js';
 export * from './learning.js';
 export * from './communities.js';
+export * from './api-keys.js';

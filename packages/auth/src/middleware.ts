@@ -1,7 +1,7 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { MembershipRepository, db, users, organizations, sql } from '@rag/database';
+import { ApiKeyRepository, MembershipRepository, db, users, organizations, sql } from '@rag/database';
 import { verifyJwt } from './jwt-verify.js';
-import { hasPermission, Role, Action } from './rbac.js';
+import { capRole, hasPermission, Role, Action } from './rbac.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -11,10 +11,17 @@ declare module 'fastify' {
       orgId?: string;
     };
     userRole?: Role;
+    apiKey?: {
+      id: string;
+      role: Role;
+      orgId: string;
+      name: string;
+    };
   }
 }
 
 const membershipRepo = new MembershipRepository();
+const apiKeyRepo = new ApiKeyRepository();
 
 /**
  * The authenticated user for a request. `authenticate` (an onRequest hook on every /api/v1
@@ -67,20 +74,59 @@ async function ensurePersonalWorkspace(userId: string, email: string | undefined
   provisionedOrgs.add(cacheKey);
 }
 
+/** Extract raw bearer token or `X-Api-Key` header credential. */
+function extractCredential(request: FastifyRequest): string | null {
+  const apiKeyHeader = request.headers['x-api-key'];
+  const rawApiKey = Array.isArray(apiKeyHeader) ? apiKeyHeader[0] : apiKeyHeader;
+  if (typeof rawApiKey === 'string' && rawApiKey.trim()) {
+    return rawApiKey.trim();
+  }
+
+  const authHeader = request.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
+    return token || null;
+  }
+  return null;
+}
+
 /**
- * Fastify middleware to authenticate requests using JWT
+ * Fastify middleware to authenticate requests using Keycloak JWT or org-scoped API key (`ak_live_...`).
  */
 export async function authenticate(request: FastifyRequest, reply: FastifyReply) {
-  const authHeader = request.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  const token = extractCredential(request);
+  if (!token) {
     return reply.status(401).send({ error: { code: 'UNAUTHORIZED', message: 'Missing or invalid authorization header', requestId: request.id } });
   }
 
-  const token = authHeader.split(' ')[1];
+  const requested = request.headers['x-org-id'];
+  const requestedOrgId = Array.isArray(requested) ? requested[0] : requested;
 
-  if (!token) {
-    return reply.status(401).send({ error: { code: 'UNAUTHORIZED', message: 'Missing token', requestId: request.id } });
+  if (token.startsWith('ak_live_')) {
+    const verified = await apiKeyRepo.verifyKey(token);
+    if (!verified) {
+      return reply.status(401).send({ error: { code: 'UNAUTHORIZED', message: 'Invalid, expired, or revoked API key', requestId: request.id } });
+    }
+    if (requestedOrgId) {
+      if (!UUID_RE.test(requestedOrgId)) {
+        return reply.status(400).send({ error: { code: 'BAD_REQUEST', message: 'Invalid X-Org-Id header', requestId: request.id } });
+      }
+      if (requestedOrgId !== verified.orgId) {
+        return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'API key is scoped to a single organization', requestId: request.id } });
+      }
+    }
+    const keyRole = (['owner', 'admin', 'member', 'viewer'].includes(verified.role) ? verified.role : 'viewer') as Role;
+    request.user = {
+      id: verified.createdBy,
+      orgId: verified.orgId,
+    };
+    request.apiKey = {
+      id: verified.id,
+      role: keyRole,
+      orgId: verified.orgId,
+      name: verified.name,
+    };
+    return;
   }
 
   const result = await verifyJwt(token);
@@ -115,8 +161,6 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
   // only a *request* — it is honoured solely if the user has an active
   // membership in that org, otherwise the request is rejected outright rather
   // than silently falling back (which would show the wrong library's data).
-  const requested = request.headers['x-org-id'];
-  const requestedOrgId = Array.isArray(requested) ? requested[0] : requested;
   if (requestedOrgId && requestedOrgId !== orgId) {
     if (!UUID_RE.test(requestedOrgId)) {
       return reply.status(400).send({ error: { code: 'BAD_REQUEST', message: 'Invalid X-Org-Id header', requestId: request.id } });
@@ -146,11 +190,15 @@ export function requireLibraryPermission(action: Action) {
     if (!id || !UUID_RE.test(id)) {
       return reply.status(400).send({ error: { code: 'BAD_REQUEST', message: 'Invalid library id', requestId: request.id } });
     }
-    const role = (await membershipRepo.getRole(request.user.id, id)) as Role | null;
+    if (request.apiKey && id !== request.apiKey.orgId) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'API key is scoped to a single organization', requestId: request.id } });
+    }
+    const membershipRole = (await membershipRepo.getRole(request.user.id, id)) as Role | null;
     // 404 (not 403) for non-members so library ids can't be probed.
-    if (!role) {
+    if (!membershipRole) {
       return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Library not found', requestId: request.id } });
     }
+    const role = request.apiKey ? capRole(request.apiKey.role, membershipRole) : membershipRole;
     request.userRole = role;
     // An array means "any of" — used where a weaker "own" variant is enough to enter the
     // route and the handler then checks ownership (see canMutateDocument).
@@ -178,10 +226,11 @@ export function requirePermissionMiddleware(action: Action | Action[]) {
       return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'User does not belong to an organization', requestId: request.id } });
     }
 
-    const role = (await membershipRepo.getRole(userId, orgId)) as Role | null;
-    if (!role) {
+    const membershipRole = (await membershipRepo.getRole(userId, orgId)) as Role | null;
+    if (!membershipRole) {
       return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'No membership found for this organization', requestId: request.id } });
     }
+    const role = request.apiKey ? capRole(request.apiKey.role, membershipRole) : membershipRole;
     request.userRole = role;
 
     // An array means "any of" — used where a weaker "own" variant is enough to enter the

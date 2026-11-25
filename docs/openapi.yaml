@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
   title: ArkhiveRAG API
-  version: 3.0.0
+  version: 3.2.0
   description: >
     Multi-tenant BYOK Enterprise RAG API built on PostgreSQL (pgvector HNSW + composite GIN FTS +
-    Knowledge Graph + Personalized PageRank), Redis, MinIO, and Keycloak OIDC.
+    Knowledge Graph + Personalized PageRank), Redis, MinIO, Keycloak OIDC, scoped API keys, and MCP.
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
@@ -15,6 +15,7 @@ servers:
     description: Production reverse proxy (Caddy)
 security:
   - bearerAuth: []
+  - apiKeyAuth: []
 tags:
   - name: Probes
   - name: Chat
@@ -22,8 +23,10 @@ tags:
   - name: Documents
   - name: Folders
   - name: Libraries
+  - name: API Keys
   - name: Retrieval Learning
   - name: Agent
+  - name: MCP
 
 paths:
   /health:
@@ -591,12 +594,82 @@ paths:
         "403":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/api-keys:
+    get:
+      tags: [API Keys]
+      summary: List org-scoped API keys (metadata and prefix only)
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "200":
+          description: List of organization API keys
+    post:
+      tags: [API Keys]
+      summary: Create an org-scoped, role-bound API key (ak_live_...)
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                role: { type: string, enum: [viewer, member, admin], default: member }
+                expiresInDays: { type: integer, minimum: 1, maximum: 365 }
+      responses:
+        "201":
+          description: Key minted (plaintext secret returned once)
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/api-keys/{id}:
+    delete:
+      tags: [API Keys]
+      summary: Revoke an active org-scoped API key
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Key revoked
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /mcp:
+    post:
+      tags: [MCP]
+      summary: Streamable HTTP Model Context Protocol (JSON-RPC 2.0) server with per-tool RBAC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jsonrpc, method]
+              properties:
+                jsonrpc: { type: string, enum: ["2.0"] }
+                id: { type: [string, integer, "null"] }
+                method: { type: string, enum: [initialize, notifications/initialized, ping, tools/list, tools/call] }
+                params: { type: object }
+      responses:
+        "200":
+          description: JSON-RPC 2.0 response
+        "202":
+          description: Notification acknowledged
+
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: JWT or ak_live_... API key
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
   parameters:
     OrgHeader:
       name: X-Organization-Id

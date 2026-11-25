@@ -1,11 +1,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { ChevronsUpDown, Check, Plus, Users, UserPlus, Loader2, User } from 'lucide-react'
+import { ChevronsUpDown, Check, Plus, Users, UserPlus, Loader2, User, KeyRound } from 'lucide-react'
 import {
   getActiveLibraryId, setActiveLibraryId, libraryApi, hardNavigate, type Library,
 } from '@/lib/active-library'
 import { LibraryMembersModal } from '@/components/LibraryMembersModal'
+import { ApiKeysModal } from '@/components/ApiKeysModal'
 
 /** Sidebar control for choosing which library (personal or shared) the app is working in. */
 export function LibrarySwitcher() {
@@ -13,6 +14,7 @@ export function LibrarySwitcher() {
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
   const [showMembers, setShowMembers] = useState(false)
+  const [showApiKeys, setShowApiKeys] = useState(false)
   const [mode, setMode] = useState<'list' | 'create' | 'join'>('list')
   const [text, setText] = useState('')
   const [description, setDescription] = useState('')
@@ -101,6 +103,11 @@ export function LibrarySwitcher() {
                   <UserPlus className="w-4 h-4" />Members &amp; invites
                 </button>
               )}
+              {(!active || active.kind === 'personal' || active.role === 'owner' || active.role === 'admin') && (
+                <button onClick={() => { setOpen(false); setShowApiKeys(true) }} className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md hover:bg-zinc-200/70 dark:hover:bg-zinc-800/70 text-sm text-zinc-700 dark:text-zinc-300">
+                  <KeyRound className="w-4 h-4" />API Keys
+                </button>
+              )}
               <button onClick={() => { setMode('create'); setText('') }} className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md hover:bg-zinc-200/70 dark:hover:bg-zinc-800/70 text-sm text-zinc-700 dark:text-zinc-300">
                 <Plus className="w-4 h-4" />New shared library
               </button>
@@ -144,6 +151,14 @@ export function LibrarySwitcher() {
           library={active}
           onClose={() => setShowMembers(false)}
           onLeft={() => switchTo(null)}
+        />
+      )}
+
+      {showApiKeys && (
+        <ApiKeysModal
+          libraryName={active?.kind === 'shared' ? active.name : 'Personal Workspace'}
+          callerRole={active?.role === 'admin' ? 'admin' : 'owner'}
+          onClose={() => setShowApiKeys(false)}
         />
       )}
     </div>
