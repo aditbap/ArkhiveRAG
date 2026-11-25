@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
@@ -11,16 +12,36 @@ import { conversationsRoutes } from './routes/conversations.js';
 import folderRoutes from './routes/folders.js';
 import { libraryRoutes } from './routes/libraries.js';
 import { learningRoutes } from './routes/learning.js';
-import { registerMetrics } from './plugins/metrics.js';
+import { ragRedisDegraded, registerMetrics } from './plugins/metrics.js';
 import { redisConnection } from './queue.js';
 import { consumeRateLimit } from './lib/rate-limit.js';
 import * as dotenv from 'dotenv';
 
 dotenv.config({ path: '../../.env' });
 
+const W3C_TRACEPARENT_RE = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/i;
+
+function buildTraceparent(incomingHeader?: string): string {
+  if (incomingHeader) {
+    const m = W3C_TRACEPARENT_RE.exec(incomingHeader.trim());
+    if (m?.[1]) {
+      const spanId = crypto.randomBytes(8).toString('hex');
+      return `00-${m[1].toLowerCase()}-${spanId}-01`;
+    }
+  }
+  return `00-${crypto.randomBytes(16).toString('hex')}-${crypto.randomBytes(8).toString('hex')}-01`;
+}
+
 export function buildServer(): FastifyInstance {
   const server = fastify({
     ignoreTrailingSlash: true,
+    genReqId: (req) => {
+      const incoming = req.headers['x-request-id'];
+      if (typeof incoming === 'string' && /^[a-zA-Z0-9._-]{1,128}$/.test(incoming.trim())) {
+        return incoming.trim();
+      }
+      return crypto.randomUUID();
+    },
     logger: {
       level: process.env.LOG_LEVEL || 'info',
     },
@@ -30,6 +51,14 @@ export function buildServer(): FastifyInstance {
     // Behind the reverse proxy: take the client address from X-Forwarded-For so per-IP limits and
     // logs see real clients rather than the proxy.
     trustProxy: process.env.TRUST_PROXY === 'true',
+  });
+
+  // Echo request correlation & W3C traceparent headers on every response for distributed tracing.
+  server.addHook('onRequest', async (request, reply) => {
+    const incomingTp = typeof request.headers['traceparent'] === 'string' ? request.headers['traceparent'] : undefined;
+    const tp = buildTraceparent(incomingTp);
+    reply.header('x-request-id', request.id);
+    reply.header('traceparent', tp);
   });
 
   // Plugins
@@ -79,8 +108,14 @@ export function buildServer(): FastifyInstance {
   // finer-grained and live in the routes). Fails open if Redis is down.
   const ipLimit = parseInt(process.env.RATE_LIMIT_IP_PER_MINUTE || '600', 10);
   server.addHook('onRequest', async (request, reply) => {
-    if (request.url === '/health' || request.url === '/ready') return;
-    const result = await consumeRateLimit(redisConnection, `rate-limit:ip:${request.ip}`, ipLimit, 60);
+    if (request.url === '/health' || request.url === '/ready' || request.url === '/metrics') return;
+    const result = await consumeRateLimit(
+      redisConnection,
+      `rate-limit:ip:${request.ip}`,
+      ipLimit,
+      60,
+      () => ragRedisDegraded.inc({ operation: 'ip_rate_limit' }),
+    );
     if (!result.allowed) {
       return reply.status(429).send({ error: { code: 'TOO_MANY_REQUESTS', message: 'Too many requests from this address.' } });
     }

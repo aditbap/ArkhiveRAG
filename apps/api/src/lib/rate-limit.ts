@@ -22,6 +22,7 @@ export async function consumeRateLimit(
   key: string,
   limit: number,
   windowSeconds: number,
+  onDegraded?: () => void,
 ): Promise<RateLimitResult> {
   try {
     const count = await redis.incr(key);
@@ -30,6 +31,7 @@ export async function consumeRateLimit(
     }
     return { allowed: count <= limit, count };
   } catch {
+    onDegraded?.();
     return { allowed: true, count: 0 };
   }
 }

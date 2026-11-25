@@ -71,6 +71,7 @@ update-*.ts
 *.md
 !README.md
 !BENCHMARK.md
+!infra/deploy/ROLLBACK.md
 !CHANGELOG.md
 !CONTRIBUTING.md
 !SECURITY.md

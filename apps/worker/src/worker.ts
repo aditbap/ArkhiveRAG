@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { Worker, Job, UnrecoverableError } from 'bullmq';
 import { INGESTION_QUEUE_NAME, redisConnection } from './queue.js';
+import { workerMetrics } from './health-server.js';
 import {
   JobRepository,
   ChunkRepository,
@@ -23,7 +24,7 @@ import {
   createLLMForRole,
   hasLLMConfigured,
 } from '@rag/providers';
-import { CONSTANTS, type ParsedDocument } from '@rag/core';
+import { CONSTANTS, retryWithBackoff, type ParsedDocument } from '@rag/core';
 
 const IMAGE_TYPES = ['jpeg', 'png', 'webp'];
 const ENABLE_VIRUS_SCAN = process.env.ENABLE_VIRUS_SCAN === 'true';
@@ -32,6 +33,10 @@ const KG_STRICT_INDEXING = process.env.KG_STRICT_INDEXING === 'true';
 const ENABLE_PARENT_CHILD_CHUNKING = process.env.ENABLE_PARENT_CHILD_CHUNKING !== 'false';
 const CHUNK_SIZE = parseInt(process.env.CHUNK_SIZE || String(CONSTANTS.DEFAULT_CHUNK_SIZE), 10);
 const CHUNK_OVERLAP = parseInt(process.env.CHUNK_OVERLAP || String(CONSTANTS.CHUNK_OVERLAP), 10);
+const STORAGE_DOWNLOAD_TIMEOUT_MS = Math.max(
+  2000,
+  parseInt(process.env.STORAGE_DOWNLOAD_TIMEOUT_MS || '30000', 10) || 30000,
+);
 
 const jobRepo = new JobRepository();
 const chunkRepo = new ChunkRepository();
@@ -39,13 +44,63 @@ const docRepo = new DocumentRepository();
 const kgRepo = new KnowledgeGraphRepository();
 const storage = MinioStorageProvider.fromEnv();
 
-async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(chunk as Buffer);
-  }
-  return Buffer.concat(chunks);
+async function streamToBufferWithTimeout(
+  stream: NodeJS.ReadableStream,
+  timeoutMs: number,
+): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const timer = setTimeout(() => {
+      if ('destroy' in stream && typeof stream.destroy === 'function') {
+        stream.destroy(new Error(`Storage download timed out after ${timeoutMs}ms`));
+      }
+      reject(new Error(`Storage download timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timer.unref();
+
+    stream.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    stream.on('end', () => {
+      clearTimeout(timer);
+      resolve(Buffer.concat(chunks));
+    });
+    stream.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
 }
+
+async function downloadObjectSafely(objectKey: string): Promise<Buffer> {
+  return retryWithBackoff(
+    async () => {
+      const stream = await Promise.race([
+        storage.download(objectKey),
+        new Promise<never>((_, rej) =>
+          setTimeout(() => rej(new Error(`Storage open timed out after ${STORAGE_DOWNLOAD_TIMEOUT_MS}ms`)), STORAGE_DOWNLOAD_TIMEOUT_MS),
+        ),
+      ]);
+      return streamToBufferWithTimeout(stream, STORAGE_DOWNLOAD_TIMEOUT_MS);
+    },
+    { maxAttempts: 2, baseDelayMs: 500 },
+  );
+}
+
+export function isFinalJobAttempt(
+  error: unknown,
+  attemptsMade: number,
+  maxAttempts?: number,
+): boolean {
+  if (error instanceof UnrecoverableError) return true;
+  const total = Math.max(1, maxAttempts ?? 1);
+  return attemptsMade + 1 >= total;
+}
+
+export const WORKER_BULLMQ_OPTIONS = {
+  concurrency: parseInt(process.env.WORKER_CONCURRENCY || '5', 10),
+  lockDuration: 120_000,
+  stalledInterval: 30_000,
+  maxStalledCount: 2,
+};
 
 export interface IngestionJobData {
   jobId: string;
@@ -54,18 +109,22 @@ export interface IngestionJobData {
   orgId: string;
   filePath: string;
   fileType: string;
+  traceId?: string;
 }
 
 export const ingestionWorker = new Worker<IngestionJobData>(
   INGESTION_QUEUE_NAME,
   async (job: Job<IngestionJobData>) => {
-    const { jobId, documentId, orgId, fileType, filePath: objectKey } = job.data;
+    const { jobId, documentId, orgId, fileType, filePath: objectKey, traceId } = job.data;
+    const logPrefix = traceId ? `[Worker][trace=${traceId}]` : '[Worker]';
+    const jobStartMs = Date.now();
+    workerMetrics.activeJobs++;
 
-    console.log(`[Worker] Starting job ${jobId} for document ${documentId}`);
+    console.log(`${logPrefix} Starting job ${jobId} (attempt ${job.attemptsMade + 1}/${job.opts.attempts ?? 1}) for document ${documentId}`);
 
     try {
       await docRepo.updateStatus(orgId, documentId, 'processing');
-      const buffer = await streamToBuffer(await storage.download(objectKey));
+      const buffer = await downloadObjectSafely(objectKey);
 
       // 0. Virus scan (opt-in via ENABLE_VIRUS_SCAN)
       if (ENABLE_VIRUS_SCAN) {
@@ -175,30 +234,21 @@ export const ingestionWorker = new Worker<IngestionJobData>(
         });
       }
 
-      // 4. Indexing Phase (Save parent containers first so child rows can link via parent_chunk_id)
+      // 4. Crash-safe, idempotent atomic Indexing Phase (delete partial version rows -> insert parents -> insert children -> deactivate older versions)
       await jobRepo.updateStatus(orgId, jobId, 'indexing', 'saving_to_pgvector', {
         chunks_total,
         chunks_indexed: 0,
       });
 
       const versionId = job.data.versionId;
-      const insertedParents =
-        batch.parents.length > 0
-          ? await chunkRepo.insertChunks(
-              orgId,
-              documentId,
-              versionId,
-              batch.parents.map((p) => ({
-                text: p.text,
-                embedding: null,
-                pageNumber: p.pageNumber,
-                sectionHeading: p.sectionHeading,
-                chunkRole: 'parent' as const,
-                metadata: p.metadata,
-              })),
-              embedder.model,
-            )
-          : [];
+      const parentInputs: InsertChunkInput[] = batch.parents.map((p) => ({
+        text: p.text,
+        embedding: null,
+        pageNumber: p.pageNumber,
+        sectionHeading: p.sectionHeading,
+        chunkRole: 'parent' as const,
+        metadata: p.metadata,
+      }));
 
       const chunksWithEmbeddings: InsertChunkInput[] = [];
       for (let i = 0; i < searchableChunks.length; i++) {
@@ -206,16 +256,12 @@ export const ingestionWorker = new Worker<IngestionJobData>(
         const hash = hashes[i];
         const embedding = hash ? existingEmbeddings.get(hash) : undefined;
         if (chunk && embedding) {
-          const parentRow =
-            chunk.chunkRole === 'child' && chunk.parentIndex != null
-              ? insertedParents[chunk.parentIndex]
-              : undefined;
           chunksWithEmbeddings.push({
             text: chunk.text,
             embedding,
             pageNumber: chunk.pageNumber,
             sectionHeading: chunk.sectionHeading,
-            parentChunkId: parentRow?.id ?? null,
+            parentIndex: chunk.chunkRole === 'child' ? (chunk.parentIndex ?? null) : null,
             chunkRole: chunk.chunkRole ?? 'standalone',
             metadata: chunk.metadata,
           });
@@ -223,16 +269,16 @@ export const ingestionWorker = new Worker<IngestionJobData>(
       }
 
       console.log(
-        `[Worker] Saving ${chunksWithEmbeddings.length} embedded chunks (+ ${insertedParents.length} parents) to Postgres...`,
+        `${logPrefix} Atomically replacing ${chunksWithEmbeddings.length} embedded chunks (+ ${parentInputs.length} parents) for version ${versionId}...`,
       );
-      const insertedChunks = await chunkRepo.insertChunks(
+      const { insertedChunks } = await chunkRepo.replaceVersionChunks(
         orgId,
         documentId,
         versionId,
+        parentInputs,
         chunksWithEmbeddings,
         embedder.model,
       );
-      await chunkRepo.deactivateOtherVersions(orgId, documentId, versionId);
 
       // 5. LightRAG Knowledge Graph Extraction & Incremental Indexing Phase
       let kgStats: { entitiesUpserted: number; relationsUpserted: number; cacheHits: number; skippedUnchanged?: boolean } | null = null;
@@ -323,21 +369,46 @@ export const ingestionWorker = new Worker<IngestionJobData>(
       });
       await docRepo.updateStatus(orgId, documentId, 'ready');
       await redisConnection.incr(`rag:cache-version:${orgId}`).catch(() => undefined);
-      console.log(`[Worker] Job ${jobId} completed successfully.`);
+      console.log(`${logPrefix} Job ${jobId} completed successfully.`);
+      workerMetrics.completedJobs++;
+      workerMetrics.lastJobDurationSeconds = (Date.now() - jobStartMs) / 1000;
     } catch (error) {
-      console.error(`[Worker] Job ${jobId} failed:`, error);
+      const finalAttempt = isFinalJobAttempt(error, job.attemptsMade, job.opts.attempts);
+      if (finalAttempt) workerMetrics.failedJobs++;
+      else workerMetrics.retriedJobs++;
+      workerMetrics.lastJobDurationSeconds = (Date.now() - jobStartMs) / 1000;
+      console.error(
+        `${logPrefix} Job ${jobId} failed (attempt ${job.attemptsMade + 1}/${job.opts.attempts ?? 1}, final=${finalAttempt}):`,
+        error,
+      );
       if (error instanceof Error) {
-        await jobRepo.failJob(orgId, jobId, error);
-        await docRepo.updateStatus(orgId, documentId, 'failed', error.message);
+        if (finalAttempt) {
+          await jobRepo.failJob(orgId, jobId, error).catch(() => undefined);
+          await docRepo.updateStatus(orgId, documentId, 'failed', error.message).catch(() => undefined);
+        } else {
+          await jobRepo
+            .updateStatus(orgId, jobId, 'pending', 'retrying_after_transient_error', {
+              last_error: error.message,
+              attempt: job.attemptsMade + 1,
+            })
+            .catch(() => undefined);
+        }
       }
       throw error;
+    } finally {
+      workerMetrics.activeJobs = Math.max(0, workerMetrics.activeJobs - 1);
     }
   },
   {
     connection: redisConnection,
-    concurrency: parseInt(process.env.WORKER_CONCURRENCY || '5', 10),
+    ...WORKER_BULLMQ_OPTIONS,
   },
 );
+
+ingestionWorker.on('stalled', (jobId) => {
+  workerMetrics.stalledJobs++;
+  console.warn(`[Worker] Reclaimed stalled BullMQ job ${jobId}`);
+});
 
 ingestionWorker.on('completed', (job) => {
   console.log(`Job ${job.id} has completed!`);

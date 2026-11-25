@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { FastifyInstance } from 'fastify';
 import client from 'prom-client';
+import { getDatabasePoolStats } from '@rag/database';
 import { ingestionQueue } from '../queue.js';
 
 const register = new client.Registry();
@@ -28,6 +29,65 @@ export const ragCacheHits = new client.Counter({
   registers: [register],
 });
 
+export const ragRedisDegraded = new client.Counter({
+  name: 'rag_redis_degraded_total',
+  help: 'Number of requests that failed open because Redis was unavailable or timed out',
+  labelNames: ['operation'],
+  registers: [register],
+});
+
+export const ragDependencyErrors = new client.Counter({
+  name: 'rag_dependency_errors_total',
+  help: 'Dependency errors by subsystem and operation',
+  labelNames: ['dependency', 'operation'],
+  registers: [register],
+});
+
+export const ragRerankerFallbacks = new client.Counter({
+  name: 'rag_reranker_fallbacks_total',
+  help: 'Cross-encoder reranker fallback activations (timeout, rate-limit, circuit open)',
+  labelNames: ['reason'],
+  registers: [register],
+});
+
+function withMetricsTimeout<T>(promise: Promise<T>, ms = 500): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('metrics collect timeout')), ms);
+    timer.unref();
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+// Postgres connection pool & saturation visibility via pg_stat_activity.
+new client.Gauge({
+  name: 'rag_db_pool_connections',
+  help: 'PostgreSQL connection count by state for the current database',
+  labelNames: ['state'],
+  registers: [register],
+  async collect() {
+    try {
+      const stats = await withMetricsTimeout(getDatabasePoolStats(), 500);
+      this.set({ state: 'active' }, stats.active);
+      this.set({ state: 'idle' }, stats.idle);
+      this.set({ state: 'idle_in_transaction' }, stats.idleInTransaction);
+      this.set({ state: 'waiting' }, stats.waiting);
+      this.set({ state: 'total' }, stats.total);
+      this.set({ state: 'pool_max' }, stats.poolMax);
+    } catch {
+      /* Postgres unreachable or timed out: leave last values; /ready reports the outage */
+    }
+  },
+});
+
 // Ingestion backlog: the signal that uploads are piling up (worker down, embedding API failing).
 new client.Gauge({
   name: 'ingestion_queue_jobs',
@@ -36,10 +96,13 @@ new client.Gauge({
   registers: [register],
   async collect() {
     try {
-      const counts = await ingestionQueue.getJobCounts('waiting', 'active', 'delayed', 'failed');
+      const counts = await withMetricsTimeout(
+        ingestionQueue.getJobCounts('waiting', 'active', 'delayed', 'failed'),
+        500,
+      );
       for (const [state, n] of Object.entries(counts)) this.set({ state }, n);
     } catch {
-      /* Redis unreachable: leave the last values; the readiness probe reports the outage */
+      /* Redis unreachable or timed out: leave last values; /ready reports the outage */
     }
   },
 });

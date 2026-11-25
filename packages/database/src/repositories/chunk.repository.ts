@@ -11,6 +11,8 @@ export interface InsertChunkInput {
   pageNumber?: number;
   sectionHeading?: string;
   parentChunkId?: string | null;
+  /** Positional index into the `parents` array when using `replaceVersionChunks`. */
+  parentIndex?: number | null;
   chunkRole?: 'parent' | 'child' | 'standalone';
   metadata?: Record<string, unknown>;
 }
@@ -80,6 +82,108 @@ export class ChunkRepository extends BaseRepository {
       inserted.push(...rows);
     }
     return inserted;
+  }
+
+  /**
+   * Crash-safe, idempotent atomic replacement of all chunks for a single document version.
+   * Runs inside one Postgres transaction:
+   *   1. Deletes any partial rows previously written for `(orgId, documentId, versionId)`
+   *      (prevents duplicate chunks when a worker crashes / SIGKILLs mid-ingestion and retries).
+   *   2. Inserts parent containers and links child chunks via `parentIndex`.
+   *   3. Deactivates chunks belonging to older versions of the same document.
+   */
+  async replaceVersionChunks(
+    orgId: string,
+    documentId: string,
+    versionId: string,
+    parents: InsertChunkInput[],
+    searchableChunks: InsertChunkInput[],
+    embeddingModel: string,
+  ): Promise<{
+    insertedParents: (typeof documentChunks.$inferSelect)[];
+    insertedChunks: (typeof documentChunks.$inferSelect)[];
+  }> {
+    this.requireTenant(orgId);
+
+    return this.db.transaction(async (tx) => {
+      await tx
+        .delete(documentChunks)
+        .where(
+          and(
+            eq(documentChunks.orgId, orgId),
+            eq(documentChunks.documentId, documentId),
+            eq(documentChunks.versionId, versionId),
+          ),
+        );
+
+      const batchSize = 100;
+      const insertedParents: (typeof documentChunks.$inferSelect)[] = [];
+      if (parents.length > 0) {
+        const parentRecords = parents.map((chunk, index) => ({
+          orgId,
+          documentId,
+          versionId,
+          chunkIndex: index,
+          content: chunk.text,
+          contentHash: crypto.createHash('sha256').update(chunk.text).digest('hex'),
+          tokenCount: estimateTokens(chunk.text),
+          pageNumber: chunk.pageNumber ?? null,
+          sectionHeading: chunk.sectionHeading ?? null,
+          parentChunkId: null,
+          chunkRole: 'parent' as const,
+          metadata: chunk.metadata || {},
+          embedding: null,
+          embeddingModel: null,
+        }));
+        for (let i = 0; i < parentRecords.length; i += batchSize) {
+          const rows = await tx.insert(documentChunks).values(parentRecords.slice(i, i + batchSize)).returning();
+          insertedParents.push(...rows);
+        }
+      }
+
+      const insertedChunks: (typeof documentChunks.$inferSelect)[] = [];
+      if (searchableChunks.length > 0) {
+        const childRecords = searchableChunks.map((chunk, index) => {
+          const linkedParent =
+            chunk.chunkRole === 'child' && chunk.parentIndex != null
+              ? insertedParents[chunk.parentIndex]
+              : undefined;
+          return {
+            orgId,
+            documentId,
+            versionId,
+            chunkIndex: index,
+            content: chunk.text,
+            contentHash: crypto.createHash('sha256').update(chunk.text).digest('hex'),
+            tokenCount: estimateTokens(chunk.text),
+            pageNumber: chunk.pageNumber ?? null,
+            sectionHeading: chunk.sectionHeading ?? null,
+            parentChunkId: linkedParent?.id ?? chunk.parentChunkId ?? null,
+            chunkRole: chunk.chunkRole ?? 'standalone',
+            metadata: chunk.metadata || {},
+            embedding: chunk.embedding,
+            embeddingModel: chunk.embedding ? embeddingModel : null,
+          };
+        });
+        for (let i = 0; i < childRecords.length; i += batchSize) {
+          const rows = await tx.insert(documentChunks).values(childRecords.slice(i, i + batchSize)).returning();
+          insertedChunks.push(...rows);
+        }
+      }
+
+      await tx
+        .update(documentChunks)
+        .set({ isActive: false })
+        .where(
+          and(
+            eq(documentChunks.orgId, orgId),
+            eq(documentChunks.documentId, documentId),
+            ne(documentChunks.versionId, versionId),
+          ),
+        );
+
+      return { insertedParents, insertedChunks };
+    });
   }
 
   /**
