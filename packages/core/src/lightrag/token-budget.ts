@@ -136,40 +136,53 @@ function compactText(text: string, maxChars: number): string {
 }
 
 /**
- * Prioritizes KG entities/relations that add NOVEL or CROSS-DOCUMENT bridge context
- * not already verbatim inside the selected `chunksUsed`, while keeping at most
- * `maxRedundantSignposts` concise items whose provenance chunks are already present.
+ * Grounded Bridge-First KG Filtering:
+ * Eliminates noisy distractor KG items from unselected low-rank documents while keeping:
+ *   1. Cross-document bridge items touching at least one retrieved chunk (highest multi-hop value)
+ *   2. High-relevance uncovered KG items (for KG-only modes or when a chunk didn't fit budget)
+ *   3. At most `maxRedundantSignposts` concise items touching retrieved chunks when Tiers 1-2 are sparse.
  */
-function prioritizeNonRedundantKg<T extends { sourceChunkIds: string[]; documentIds: string[] }>(
+function prioritizeNonRedundantKg<
+  T extends { sourceChunkIds: string[]; documentIds: string[]; similarity?: number },
+>(
   items: T[],
   coveredChunkIds: Set<string>,
-  maxRedundantSignposts = 2,
+  maxRedundantSignposts = 1,
 ): T[] {
   if (items.length === 0 || coveredChunkIds.size === 0) return items;
-  const novelOrBridge: T[] = [];
-  const redundant: T[] = [];
+
+  const crossDocBridges: T[] = [];
+  const highSignalUncovered: T[] = [];
+  const coveredSignposts: T[] = [];
 
   for (const item of items) {
-    const hasUncoveredChunk =
-      item.sourceChunkIds.length === 0 || item.sourceChunkIds.some((cid) => !coveredChunkIds.has(cid));
+    const touchesCovered = item.sourceChunkIds.some((cid) => coveredChunkIds.has(cid));
     const isCrossDocBridge = item.documentIds.length > 1;
-    if (hasUncoveredChunk || isCrossDocBridge) {
-      novelOrBridge.push(item);
-    } else {
-      redundant.push(item);
+
+    if (touchesCovered && isCrossDocBridge) {
+      crossDocBridges.push(item);
+    } else if (touchesCovered) {
+      coveredSignposts.push(item);
+    } else if (item.sourceChunkIds.length === 0 || (item.similarity ?? 0) >= 0.55) {
+      // Keep only genuinely high-relevance uncovered KG facts (or synthetic provenance-less items),
+      // rejecting low-similarity distractors from documents LTR already filtered out.
+      highSignalUncovered.push(item);
     }
   }
 
-  return [...novelOrBridge, ...redundant.slice(0, maxRedundantSignposts)];
+  const keptUncovered = highSignalUncovered.slice(0, crossDocBridges.length > 0 ? 1 : 2);
+  const needSignpost = crossDocBridges.length === 0 && keptUncovered.length === 0;
+  const keptSignposts = coveredSignposts.slice(0, needSignpost ? Math.max(1, maxRedundantSignposts) : 0);
+
+  return [...crossDocBridges, ...keptUncovered, ...keptSignposts];
 }
 
 /**
  * Assembles LightRAG's structured dual-level context (compact Knowledge Graph Entities +
  * Relationships + grounded Document Chunks with `[Citation N]` markers):
  * - Prioritizes grounded `[Citation N]` document chunks first.
- * - Prunes redundant single-chunk KG items already verbatim in selected chunks while
- *   preserving cross-document bridge & novel KG facts.
- * - Uses compact single-line KG formatting (~45% fewer tokens than verbose JSON-per-item).
+ * - Filters KG context to grounded cross-document bridges & high-signal novel facts,
+ *   eliminating unselected-doc KG distractors (~60% leaner than verbose JSON-per-item).
  */
 export function assembleLightRagContext(params: {
   entities: RetrievedEntity[];
@@ -181,16 +194,16 @@ export function assembleLightRagContext(params: {
   const maxRelationTokens = params.budget?.maxRelationTokens ?? CONSTANTS.DEFAULT_MAX_RELATION_TOKENS;
   const maxTotalTokens = params.budget?.maxTotalTokens ?? CONSTANTS.DEFAULT_MAX_TOTAL_TOKENS;
 
-  const entityCap = Math.min(maxEntityTokens, Math.floor(maxTotalTokens * 0.28));
-  const relationCap = Math.min(maxRelationTokens, Math.floor(maxTotalTokens * 0.28));
-  const overheadTokens = 80;
+  const entityCap = Math.min(maxEntityTokens, Math.floor(maxTotalTokens * 0.25));
+  const relationCap = Math.min(maxRelationTokens, Math.floor(maxTotalTokens * 0.25));
+  const overheadTokens = 64;
 
   // 1. Reserve primary budget for grounded `[Citation N]` document chunks first
-  const chunkBudget = Math.max(512, maxTotalTokens - Math.min(entityCap + relationCap, Math.floor(maxTotalTokens * 0.4)) - overheadTokens);
+  const chunkBudget = Math.max(512, maxTotalTokens - Math.min(entityCap + relationCap, Math.floor(maxTotalTokens * 0.35)) - overheadTokens);
   const chunkSlice = truncateByTokenBudget(
     params.chunks,
     (c, idx) => {
-      const metaParts = [`Source: ${c.documentTitle}`];
+      const metaParts = [c.documentTitle];
       if (c.sectionHeading && c.sectionHeading.toLowerCase() !== c.documentTitle.toLowerCase()) {
         metaParts.push(`Section: ${c.sectionHeading}`);
       }
@@ -201,24 +214,24 @@ export function assembleLightRagContext(params: {
     chunkBudget,
   );
 
-  // 2. Prune KG redundancy against chunks already included & serialize compactly (~45% token savings)
+  // 2. Grounded bridge-first KG filtering & compact single-line serialization
   const coveredChunkIds = new Set(chunkSlice.kept.map((c) => c.id));
-  const prunedEntities = prioritizeNonRedundantKg(params.entities, coveredChunkIds, 2);
-  const prunedRelations = prioritizeNonRedundantKg(params.relations, coveredChunkIds, 2);
+  const prunedEntities = prioritizeNonRedundantKg(params.entities, coveredChunkIds, 1);
+  const prunedRelations = prioritizeNonRedundantKg(params.relations, coveredChunkIds, 1);
 
   const remainingForKg = Math.max(0, maxTotalTokens - chunkSlice.tokensUsed - overheadTokens);
-  const effEntityCap = Math.min(entityCap, Math.floor(remainingForKg * 0.52));
+  const effEntityCap = Math.min(entityCap, Math.floor(remainingForKg * 0.5));
 
   const entitySlice = truncateByTokenBudget(
     prunedEntities,
-    (e) => `- ${e.entityName} (${e.entityType}): ${compactText(e.description, 160)}`,
+    (e) => `- ${e.entityName} (${e.entityType}): ${compactText(e.description, 100)}`,
     effEntityCap,
   );
 
   const effRelationCap = Math.min(relationCap, Math.max(0, remainingForKg - entitySlice.tokensUsed));
   const relationSlice = truncateByTokenBudget(
     prunedRelations,
-    (r) => `- ${r.sourceEntity} -> ${r.targetEntity} [${compactText(r.keywords, 40)}]: ${compactText(r.description, 140)}`,
+    (r) => `- ${r.sourceEntity} -> ${r.targetEntity} [${compactText(r.keywords, 32)}]: ${compactText(r.description, 95)}`,
     effRelationCap,
   );
 
