@@ -1,0 +1,111 @@
+groups:
+  - name: corporate-rag-slo-and-health
+    rules:
+      - alert: RagApiDown
+        expr: up{job="rag-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "Corporate RAG API target is down"
+          description: "Prometheus cannot scrape rag-api metrics for >1m ({{ $labels.instance }})."
+
+      - alert: RagWorkerDown
+        expr: up{job="rag-worker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: worker
+        annotations:
+          summary: "Corporate RAG Worker target is down"
+          description: "Ingestion worker metrics endpoint is unreachable for >2m ({{ $labels.instance }})."
+
+      - alert: RagHighHttp5xxRate
+        expr: >
+          (
+            sum(rate(http_request_duration_seconds_count{status_code=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_request_duration_seconds_count[5m])), 1e-6)
+          ) > 0.02
+        for: 5m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "High API HTTP 5xx error rate (>2%)"
+          description: "API 5xx ratio exceeded 2% over 5 minutes (current: {{ $value | humanizePercentage }})."
+
+      - alert: RagRetrievalLatencySloBreach
+        expr: >
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(rag_pipeline_stage_duration_seconds_bucket{stage="retrieval"}[5m]))
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          service: api
+        annotations:
+          summary: "RAG retrieval stage p95 latency exceeded 500ms SLO"
+          description: "Retrieval stage p95 latency is {{ $value | humanizeDuration }} (SLO <= 500ms). Run pnpm ops:verify-plans and inspect pg_stat_statements."
+
+      - alert: RagDbPoolSaturation
+        expr: >
+          (rag_db_pool_connections{state="waiting"} > 10)
+          or
+          (
+            rag_db_pool_connections{state="active"}
+            /
+            clamp_min(rag_db_pool_connections{state="pool_max"}, 1)
+          ) > 0.85
+        for: 3m
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: "PostgreSQL connection pool near saturation"
+          description: "DB pool active utilization >85% or >10 active queries waiting for >3m."
+
+      - alert: RagRedisDegradedMode
+        expr: sum(increase(rag_redis_degraded_total[5m])) > 5
+        for: 2m
+        labels:
+          severity: warning
+          service: redis
+        annotations:
+          summary: "API failing open due to Redis degradation"
+          description: "rag_redis_degraded_total increased by {{ $value }} in the last 5m. Chat cache and rate limiting are failing open."
+
+      - alert: RagRerankerFallbackSpike
+        expr: sum(increase(rag_reranker_fallbacks_total[10m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: reranker
+        annotations:
+          summary: "Cross-encoder reranker fallback spike"
+          description: "Reranker fell back {{ $value }} times in 10m (timeout, rate limit, or circuit open)."
+
+      - alert: RagIngestionQueueBacklog
+        expr: ingestion_queue_jobs{state="waiting"} > 100
+        for: 10m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "Document ingestion queue backlog (>100 waiting)"
+          description: "{{ $value }} ingestion jobs waiting in BullMQ for >10m. Check worker health and embedding provider latency."
+
+      - alert: RagWorkerStalledOrFailingJobs
+        expr: >
+          (increase(worker_stalled_jobs_total[15m]) > 0)
+          or
+          (increase(worker_jobs_total{status="failed"}[15m]) > 5)
+        for: 2m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "Worker stalled or failing ingestion jobs detected"
+          description: "BullMQ reported stalled jobs or >5 failed ingestion jobs over the last 15m."

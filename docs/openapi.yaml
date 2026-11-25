@@ -1,0 +1,586 @@
+openapi: 3.1.0
+info:
+  title: Corporate Adaptive RAG API
+  version: 3.0.0
+  description: >
+    Multi-tenant BYOK Enterprise RAG API built on PostgreSQL (pgvector HNSW + composite GIN FTS +
+    Knowledge Graph + Personalized PageRank), Redis, MinIO, and Keycloak OIDC.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: http://localhost:3002
+    description: Local development API
+  - url: https://api.example.com
+    description: Production reverse proxy (Caddy)
+security:
+  - bearerAuth: []
+tags:
+  - name: Probes
+  - name: Chat
+  - name: Conversations
+  - name: Documents
+  - name: Folders
+  - name: Libraries
+  - name: Retrieval Learning
+
+paths:
+  /health:
+    get:
+      tags: [Probes]
+      security: []
+      summary: Process liveness probe
+      responses:
+        "200":
+          description: API is alive
+  /ready:
+    get:
+      tags: [Probes]
+      security: []
+      summary: Dependency readiness probe (Postgres, Redis, MinIO)
+      responses:
+        "200":
+          description: All dependencies ready
+        "503":
+          description: One or more dependencies unavailable
+  /metrics:
+    get:
+      tags: [Probes]
+      security: []
+      summary: Prometheus metrics endpoint (METRICS_PORT=9100 in production)
+      responses:
+        "200":
+          description: Prometheus text exposition
+
+  /api/v1/guest/chat:
+    post:
+      tags: [Chat]
+      security: []
+      summary: Public guest-only streaming chat (no document access)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages]
+              properties:
+                messages:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ChatMessageInput"
+      responses:
+        "200":
+          description: Server-Sent Events stream
+        "429":
+          description: Guest IP or global daily limit exceeded
+
+  /api/v1/chat/completions:
+    post:
+      tags: [Chat]
+      summary: Adaptive RAG completion (JSON or SSE)
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages]
+              properties:
+                messages:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ChatMessageInput"
+                stream:
+                  type: boolean
+                  default: false
+                conversationId:
+                  type: string
+                  format: uuid
+                documentIds:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                mode:
+                  type: string
+                  enum: [auto, mix, hybrid, local, global, naive]
+                  default: auto
+                includeDrafts:
+                  type: boolean
+                  default: false
+      responses:
+        "200":
+          description: Grounded completion with citations and retrieval metadata
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "429":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/conversations:
+    get:
+      tags: [Conversations]
+      summary: List user conversations in current org
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "200":
+          description: Conversation list
+
+  /api/v1/conversations/{id}/messages:
+    get:
+      tags: [Conversations]
+      summary: Fetch messages and citations for a conversation
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Conversation metadata and messages
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/conversations/{id}:
+    delete:
+      tags: [Conversations]
+      summary: Delete a conversation
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/documents:
+    get:
+      tags: [Documents]
+      summary: List paginated documents in org
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: folderId
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Paginated documents
+
+  /api/v1/documents/upload:
+    post:
+      tags: [Documents]
+      summary: Upload a document and enqueue ingestion
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Document queued for ingestion
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/documents/{id}/versions:
+    get:
+      tags: [Documents]
+      summary: List document versions
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Version list
+    post:
+      tags: [Documents]
+      summary: Upload a replacement file creating a new document version
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "201":
+          description: New version queued for ingestion
+
+  /api/v1/documents/{id}:
+    patch:
+      tags: [Documents]
+      summary: Rename document display name
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Updated document
+    delete:
+      tags: [Documents]
+      summary: Soft-delete document and prune Knowledge Graph references
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Soft-deleted
+
+  /api/v1/documents/{id}/move:
+    patch:
+      tags: [Documents]
+      summary: Move document to folder or root
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Document moved
+
+  /api/v1/documents/{id}/notes:
+    patch:
+      tags: [Documents]
+      summary: Update document notes
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Notes updated
+
+  /api/v1/documents/{id}/governance:
+    patch:
+      tags: [Documents]
+      summary: Transition document governance status and validity metadata
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [governanceStatus]
+              properties:
+                governanceStatus:
+                  type: string
+                  enum: [draft, approved, active, superseded, archived]
+                effectiveAt:
+                  type: [string, "null"]
+                  format: date-time
+                expiresAt:
+                  type: [string, "null"]
+                  format: date-time
+                supersedesDocumentId:
+                  type: [string, "null"]
+                  format: uuid
+                authorityTier:
+                  type: integer
+                  minimum: 1
+                  maximum: 4
+                note:
+                  type: string
+      responses:
+        "200":
+          description: Governance updated and org cache bumped
+
+  /api/v1/documents/{id}/content:
+    get:
+      tags: [Documents]
+      summary: Download or stream original uploaded document safely
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Document stream with nosniff and sandbox CSP headers
+
+  /api/v1/folders:
+    get:
+      tags: [Folders]
+      summary: List folders
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "200":
+          description: Folder list
+    post:
+      tags: [Folders]
+      summary: Create folder
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "201":
+          description: Folder created
+
+  /api/v1/folders/{id}:
+    patch:
+      tags: [Folders]
+      summary: Rename folder
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Folder renamed
+    delete:
+      tags: [Folders]
+      summary: Delete empty folder
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204":
+          description: Deleted
+
+  /api/v1/libraries:
+    get:
+      tags: [Libraries]
+      summary: List personal and shared libraries for current user
+      responses:
+        "200":
+          description: Libraries list
+    post:
+      tags: [Libraries]
+      summary: Create a shared library
+      responses:
+        "201":
+          description: Library created
+
+  /api/v1/libraries/join/{code}:
+    get:
+      tags: [Libraries]
+      summary: Preview library invite code
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Invite details
+
+  /api/v1/libraries/join:
+    post:
+      tags: [Libraries]
+      summary: Join shared library with invite code
+      responses:
+        "200":
+          description: Joined library
+
+  /api/v1/libraries/{id}:
+    get:
+      tags: [Libraries]
+      summary: Get library details
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Library metadata
+    patch:
+      tags: [Libraries]
+      summary: Update shared library metadata
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Updated library
+    delete:
+      tags: [Libraries]
+      summary: Archive shared library and invalidate ACL cache
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204":
+          description: Archived
+
+  /api/v1/libraries/{id}/members:
+    get:
+      tags: [Libraries]
+      summary: List library members
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Member list
+
+  /api/v1/libraries/{id}/members/{userId}:
+    patch:
+      tags: [Libraries]
+      summary: Update member role and invalidate ACL cache
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Role updated
+    delete:
+      tags: [Libraries]
+      summary: Remove member or leave shared library and invalidate ACL cache
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Removed
+
+  /api/v1/libraries/{id}/invites:
+    get:
+      tags: [Libraries]
+      summary: List active library invites
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Invite list
+    post:
+      tags: [Libraries]
+      summary: Create library invite code
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "201":
+          description: Invite created
+
+  /api/v1/libraries/{id}/invites/{inviteId}:
+    delete:
+      tags: [Libraries]
+      summary: Revoke library invite code
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - name: inviteId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Revoked
+
+  /api/v1/retrieval/feedback:
+    post:
+      tags: [Retrieval Learning]
+      summary: Record thumbs up/down feedback on retrieved citations
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "201":
+          description: Feedback recorded
+
+  /api/v1/retrieval/metrics:
+    get:
+      tags: [Retrieval Learning]
+      summary: Get live retrieval metrics and active config version
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - name: days
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 90, default: 7 }
+      responses:
+        "200":
+          description: Metrics summary
+
+  /api/v1/retrieval/configs:
+    get:
+      tags: [Retrieval Learning]
+      summary: List immutable retrieval config versions
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "200":
+          description: Active and historical configs
+
+  /api/v1/retrieval/optimize:
+    post:
+      tags: [Retrieval Learning]
+      summary: Run bounded weight optimization + 6-metric regression gate
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "200":
+          description: Optimization and gate evaluation result
+
+  /api/v1/retrieval/configs/{id}/promote:
+    post:
+      tags: [Retrieval Learning]
+      summary: Promote or roll back to an immutable retrieval config version
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Promoted config
+
+  /api/v1/retrieval/communities/rebuild:
+    post:
+      tags: [Retrieval Learning]
+      summary: Rebuild ACL-safe RAPTOR community summaries for the org
+      parameters:
+        - $ref: "#/components/parameters/OrgHeader"
+      responses:
+        "200":
+          description: Rebuild summary
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    OrgHeader:
+      name: X-Organization-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    ErrorResponse:
+      description: Standardized error payload
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: object
+                properties:
+                  code: { type: string }
+                  message: { type: string }
+                  requestId: { type: string }
+  schemas:
+    ChatMessageInput:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content:
+          type: string

@@ -9,7 +9,14 @@ name: rag
 
 x-app-env: &app-env
   NODE_ENV: production
-  DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/rag_platform
+  DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@pgbouncer:5432/rag_platform
+  DATABASE_POOLER_MODE: transaction
+  DATABASE_READ_URL: ${DATABASE_READ_URL:-}
+  DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-25}
+  DATABASE_CONNECT_TIMEOUT_S: ${DATABASE_CONNECT_TIMEOUT_S:-5}
+  DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+  HNSW_EF_SEARCH: ${HNSW_EF_SEARCH:-64}
+  HNSW_ITERATIVE_SCAN: ${HNSW_ITERATIVE_SCAN:-relaxed_order}
   REDIS_URL: redis://redis:6379
   MINIO_ENDPOINT: minio
   MINIO_PORT: "9000"
@@ -17,13 +24,26 @@ x-app-env: &app-env
   MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
   MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
   MINIO_BUCKET: ${MINIO_BUCKET:-documents}
-  NVIDIA_API_KEY: ${NVIDIA_API_KEY}
-  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nvidia/llama-nemotron-embed-vl-1b-v2}
-  EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-2048}
+  LLM_PROVIDER: ${LLM_PROVIDER:-cloudflare}
+  LLM_PRIMARY_MODEL: ${LLM_PRIMARY_MODEL:-@cf/meta/llama-3.1-8b-instruct}
+  LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
+  CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+  CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-cloudflare}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-@cf/baai/bge-m3}
+  EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
   EMBEDDING_TIMEOUT_MS: ${EMBEDDING_TIMEOUT_MS:-30000}
+  RERANKER_PROVIDER: ${RERANKER_PROVIDER:-auto}
+  CLOUDFLARE_RERANKER_MODEL: ${CLOUDFLARE_RERANKER_MODEL:-@cf/baai/bge-reranker-base}
+  COHERE_API_KEY: ${COHERE_API_KEY:-}
+  RERANKER_MODEL: ${RERANKER_MODEL:-rerank-v3.5}
   MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-100}
   OCR_SERVICE_URL: http://ocr:8000
-  ENABLE_VIRUS_SCAN: "true"
+  ENABLE_VIRUS_SCAN: ${ENABLE_VIRUS_SCAN:-true}
   CLAMAV_HOST: clamav
   CLAMAV_PORT: "3310"
 
@@ -31,15 +51,44 @@ services:
   postgres:
     image: pgvector/pgvector:pg15
     restart: unless-stopped
+    shm_size: 1g
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: rag_platform
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ../deploy/postgresql.conf:/etc/postgresql/postgresql.conf:ro
       - ../deploy/postgres-init.sql:/docker-entrypoint-initdb.d/01-keycloak.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d rag_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Transaction-mode connection multiplexer for API & Worker replicas.
+  # Migrations and Keycloak stay directly on `postgres:5432` (session-level locks/DDL).
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p3
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: rag_platform
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-30}
+      RESERVE_POOL_SIZE: ${PGBOUNCER_RESERVE_POOL_SIZE:-10}
+      AUTH_TYPE: scram-sha-256
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits,statement_timeout
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -119,6 +168,7 @@ services:
 
   # One-shot: applies pending SQL migrations, then exits. api/worker wait for it to succeed.
   migrate:
+    image: ${IMAGE_PREFIX:-corporate-rag}-api:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.node
@@ -133,6 +183,7 @@ services:
         condition: service_healthy
 
   api:
+    image: ${IMAGE_PREFIX:-corporate-rag}-api:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.node
@@ -149,12 +200,6 @@ services:
       CORS_ORIGINS: https://${APP_DOMAIN}
       KEYCLOAK_URL: https://${AUTH_DOMAIN}
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-rag-platform}
-      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID}
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      COHERE_API_KEY: ${COHERE_API_KEY:-}
-      LLM_PRIMARY_MODEL: ${LLM_PRIMARY_MODEL:-@cf/meta/llama-3-8b-instruct}
-      RERANKER_MODEL: ${RERANKER_MODEL:-rerank-v3.5}
       RATE_LIMIT_CHAT_PER_MINUTE: ${RATE_LIMIT_CHAT_PER_MINUTE:-20}
       GUEST_CHAT_ENABLED: ${GUEST_CHAT_ENABLED:-true}
       GUEST_CHAT_PER_IP_PER_MINUTE: ${GUEST_CHAT_PER_IP_PER_MINUTE:-6}
@@ -162,6 +207,8 @@ services:
       GUEST_CHAT_GLOBAL_PER_DAY: ${GUEST_CHAT_GLOBAL_PER_DAY:-1000}
       RATE_LIMIT_UPLOAD_PER_MINUTE: ${RATE_LIMIT_UPLOAD_PER_MINUTE:-30}
     depends_on:
+      pgbouncer:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
       redis:
@@ -178,6 +225,7 @@ services:
       start_period: 20s
 
   worker:
+    image: ${IMAGE_PREFIX:-corporate-rag}-worker:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.node
@@ -188,7 +236,10 @@ services:
       <<: *app-env
       LOG_LEVEL: ${LOG_LEVEL:-info}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
+      WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-9092}
     depends_on:
+      pgbouncer:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
       redis:
@@ -199,8 +250,15 @@ services:
         condition: service_started
       clamav:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9092/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   web:
+    image: ${IMAGE_PREFIX:-corporate-rag}-web:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.web
@@ -242,6 +300,7 @@ services:
     restart: unless-stopped
     volumes:
       - ../deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../deploy/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml

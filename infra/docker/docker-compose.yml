@@ -3,6 +3,8 @@ services:
     image: pgvector/pgvector:pg15
     container_name: rag-postgres
     restart: always
+    shm_size: 1g
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -11,11 +13,38 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ../deploy/postgresql.conf:/etc/postgresql/postgresql.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d rag_platform"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # Opt-in PgBouncer transaction pooler for local concurrency testing:
+  #   docker compose -f infra/docker/docker-compose.yml --profile pooler up -d pgbouncer
+  # Connect via DATABASE_URL=postgresql://postgres:postgres@localhost:6432/rag_platform
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p3
+    container_name: rag-pgbouncer
+    profiles: ["pooler"]
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: rag_platform
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "30"
+      RESERVE_POOL_SIZE: "10"
+      AUTH_TYPE: scram-sha-256
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits,statement_timeout
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   redis:
     image: redis:7-alpine
@@ -116,6 +145,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../deploy/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     ports:
       - "9090:9090"

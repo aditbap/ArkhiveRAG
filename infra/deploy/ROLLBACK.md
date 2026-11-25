@@ -44,7 +44,7 @@ If error rate, `p95` latency, `/ready` probes, or retrieval quality regress afte
    ```
 2. **Wait for readiness probes on both API and Worker:**
    ```bash
-   curl -fsS http://localhost:3001/ready
+   curl -fsS http://localhost:3002/ready
    curl -fsS http://localhost:9092/ready
    ```
 3. **Flush stale response caches cleanly (bumps org cache version without wiping BullMQ queues):**
@@ -54,6 +54,7 @@ If error rate, `p95` latency, `/ready` probes, or retrieval quality regress afte
    - `GET /ready` → `200` (`postgres: ok`, `redis: ok`, `storage: ok`)
    - `GET :9092/metrics` → `worker_active_jobs` & `worker_uptime_seconds` updating
    - Execute 1 authenticated retrieval query and confirm `[Citation N]` grounding & `0` errors in logs.
+   - If rolling back across major bulk ingestion/purges (>30% chunk churn), schedule online HNSW compaction: `REINDEX INDEX CONCURRENTLY idx_chunks_embedding_hnsw;`.
 
 ---
 
@@ -78,5 +79,5 @@ Use only if data corruption or destructive accidental deletion occurred:
 4. **Restart services and verify `/ready`:**
    ```bash
    docker compose -f infra/docker/docker-compose.deploy.yml start api worker
-   curl -fsS http://localhost:3001/ready && curl -fsS http://localhost:9092/ready
+   curl -fsS http://localhost:3002/ready && curl -fsS http://localhost:9092/ready
    ```
