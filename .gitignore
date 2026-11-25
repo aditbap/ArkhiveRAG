@@ -73,9 +73,11 @@ update-*.ts
 !BENCHMARK.md
 !infra/deploy/ROLLBACK.md
 !CHANGELOG.md
+!CODE_OF_CONDUCT.md
 !CONTRIBUTING.md
 !SECURITY.md
 !docs/**/*.md
+!.github/**/*.md
 
 # Uploads / Data
 uploads/
