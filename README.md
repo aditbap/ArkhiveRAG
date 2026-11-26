@@ -24,6 +24,16 @@ ArkhiveRAG unifies hybrid `pgvector` HNSW search, PostgreSQL-native Knowledge Gr
 
 [Beyond Traditional RAG](#beyond-traditional-rag) · [Benchmarks](#verified-benchmarks) · [Features](#features) · [Architecture](#architecture) · [BYOK Providers](#bring-your-own-api-key-byok) · [Quick Start](#quick-start) · [API & SDKs](#api-mcp--sdk-overview) · [Docs](#documentation--community)
 
+<br />
+
+<a href="docs/assets/arkhiverag-demo.mp4">
+  <img alt="ArkhiveRAG Overview Video (22s) — Click to watch" src="docs/assets/arkhiverag-demo-poster.jpg" width="820" />
+</a>
+
+<p>
+  <a href="docs/assets/arkhiverag-demo.mp4"><sub>▶ Watch the 22-second overview video (MP4)</sub></a>
+</p>
+
 </div>
 
 ---
